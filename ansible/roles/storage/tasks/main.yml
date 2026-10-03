@@ -10,3 +10,9 @@
     kubectl --kubeconfig {{ kubeconfig }} annotate storageclass local-path
     storageclass.kubernetes.io/is-default-class=true --overwrite
   changed_when: false
+
+- name: Wait for local-path provisioner
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ kubeconfig }} -n local-path-storage
+    rollout status deployment/local-path-provisioner --timeout=180s
+  changed_when: false

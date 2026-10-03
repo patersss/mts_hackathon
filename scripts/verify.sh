@@ -10,7 +10,15 @@ check() {
 }
 
 pods_running() {
-  kubectl get pods -A --no-headers | awk '$4!="Running" && $4!="Completed"{bad=1} END{exit bad}'
+  local deadline=$((SECONDS + 180))
+  while :; do
+    if kubectl get pods -A --no-headers |
+      awk '$4!="Running" && $4!="Completed"{bad=1} END{exit bad}'; then
+      return 0
+    fi
+    [[ ${SECONDS} -lt ${deadline} ]] || return 1
+    sleep 5
+  done
 }
 
 pods_in_pod_cidr() {
