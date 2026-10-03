@@ -107,6 +107,62 @@ gateway_split() {
   [[ "${seen}" == "v1 v2 " ]]
 }
 
+prom_query() {
+  local ip
+  ip=$(kubectl -n monitoring get svc kps-prometheus -o jsonpath='{.spec.clusterIP}')
+  curl -fsS --max-time 5 --get --data-urlencode "query=$1" "http://${ip}:9090/api/v1/query" |
+    jq -r '.data.result[0].value[1] // empty'
+}
+
+# ждёт, пока запрос вернёт ожидаемое значение: Prometheus находит target не сразу
+prom_expect() {
+  local query=$1 want=$2 deadline=$((SECONDS + 180))
+  until [[ "$(prom_query "${query}")" == "${want}" ]]; do
+    [[ ${SECONDS} -lt ${deadline} ]] || return 1
+    sleep 5
+  done
+}
+
+prometheus_ready() {
+  kubectl -n monitoring rollout status statefulset/prometheus-kps-prometheus --timeout=180s
+}
+
+app_targets_up() {
+  local pods
+  pods=$(kubectl -n "${APP_NS}" get pods -l app=hello --no-headers | wc -l)
+  prom_expect "count(up{job=\"${APP_NS}/hello\"} == 1)" "${pods}"
+}
+
+app_requests_metric() {
+  curl -fsS --max-time 5 "$(app_url /)" >/dev/null &&
+    prom_expect "sum(nginx_http_requests_total{job=\"${APP_NS}/hello\"}) > bool 0" 1
+}
+
+envoy_target_up() {
+  prom_expect 'min(up{job="envoy-gateway-system/envoy-proxy"})' 1
+}
+
+# запрос на <name>.<ip-с-дефисами>.nip.io через Gateway без внешнего DNS
+gw_host() {
+  local ip host
+  ip=$(gateway_ip)
+  host="$1.${ip//./-}.nip.io"
+  gw_curl --resolve "${host}:443:${ip}" "https://${host}$2" "${@:3}"
+}
+
+admin_password() {
+  kubectl -n monitoring get secret monitoring-admin -o jsonpath='{.data.admin-password}' | base64 -d
+}
+
+grafana_dashboard() {
+  gw_host grafana '/api/search?query=Hello' -f -u "admin:$(admin_password)" | grep -q '"uid":"hello"'
+}
+
+prometheus_auth() {
+  [[ "$(gw_host prometheus /-/ready -o /dev/null -w '%{http_code}')" == 401 ]] &&
+    gw_host prometheus /-/ready -f -o /dev/null -u "admin:$(admin_password)"
+}
+
 check "node Ready" kubectl wait node --all --for=condition=Ready --timeout=120s
 check "no DiskPressure" kubectl wait node --all --for=condition=DiskPressure=false --timeout=10s
 check "no MemoryPressure" kubectl wait node --all --for=condition=MemoryPressure=false --timeout=10s
@@ -123,5 +179,11 @@ check "Gateway HTTP :80 Hello World" gateway_http
 check "Gateway HTTPS :443 Hello World" gateway_https
 check "Gateway path routing /v1 /v2" gateway_path
 check "Gateway traffic split v1/v2" gateway_split
+check "Prometheus ready" prometheus_ready
+check "Prometheus targets app up" app_targets_up
+check "Prometheus query nginx_http_requests_total" app_requests_metric
+check "Prometheus target envoy up" envoy_target_up
+check "Grafana dashboard via Gateway" grafana_dashboard
+check "Prometheus via Gateway with basic auth" prometheus_auth
 
 exit "${failed}"

@@ -17,6 +17,8 @@ service_cidr: "10.96.0.0/12"
 
 node_ip: "{{ ansible_default_ipv4.address }}"
 base_domain: "{{ node_ip | replace('.', '-') }}.nip.io"
+grafana_host: "grafana.{{ base_domain }}"
+prometheus_host: "prometheus.{{ base_domain }}"
 deploy_user: "{{ lookup('env', 'USER') }}"
 tls_dir: /etc/kubernetes/gateway-tls
 kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"

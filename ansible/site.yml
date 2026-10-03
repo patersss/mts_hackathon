@@ -7,4 +7,5 @@
     - cni
     - storage
     - gateway
+    - monitoring
     - app
