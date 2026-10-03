@@ -24,5 +24,5 @@ jobs:
         if: failure()
         run: |
           kubectl get all -A -o wide || true
-          kubectl get events -A --sort-by=.lastTimestamp | tail -100 || true
-          sudo journalctl -u kubelet --no-pager | tail -200 || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -60 || true
+          sudo journalctl -u kubelet --no-pager | tail -40 || true

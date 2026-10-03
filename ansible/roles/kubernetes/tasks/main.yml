@@ -42,20 +42,18 @@
 
 - name: Kubeconfig dir for {{ deploy_user }}
   ansible.builtin.file:
-    path: "~{{ deploy_user }}/.kube"
+    path: "{{ kubeconfig | dirname }}"
     state: directory
     owner: "{{ deploy_user }}"
     mode: "0700"
-  when: deploy_user != 'root'
 
 - name: Kubeconfig for {{ deploy_user }}
   ansible.builtin.copy:
     src: /etc/kubernetes/admin.conf
-    dest: "~{{ deploy_user }}/.kube/config"
+    dest: "{{ kubeconfig }}"
     remote_src: true
     owner: "{{ deploy_user }}"
     mode: "0600"
-  when: deploy_user != 'root'
 
 - name: Install helm
   ansible.builtin.shell: |

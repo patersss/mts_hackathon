@@ -18,5 +18,5 @@ service_cidr: "10.96.0.0/12"
 
 node_ip: "{{ ansible_default_ipv4.address }}"
 base_domain: "{{ node_ip | replace('.', '-') }}.nip.io"
-deploy_user: "{{ lookup('env', 'SUDO_USER') or lookup('env', 'USER') }}"
-kubeconfig: /etc/kubernetes/admin.conf
+deploy_user: "{{ lookup('env', 'USER') }}"
+kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
