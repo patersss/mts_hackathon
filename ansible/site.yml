@@ -8,4 +8,5 @@
     - storage
     - gateway
     - monitoring
+    - logging
     - app

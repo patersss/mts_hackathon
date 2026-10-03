@@ -6,7 +6,8 @@
 
 - Ubuntu 24.04 LTS, 2+ vCPU, 4+ ГБ RAM.
 - Пользователь с правами sudo (не root).
-- Доступ в интернет: apt, pkgs.k8s.io, get.helm.sh, metallb.github.io, prometheus-community.github.io, Docker Hub, quay.io.
+- Доступ в интернет: apt, pkgs.k8s.io, get.helm.sh, metallb.github.io, prometheus-community.github.io,
+  grafana-community.github.io, Docker Hub, quay.io.
 - Свободные порты 80 и 443 на IP ноды.
 
 ## Развёртывание
@@ -27,7 +28,8 @@ pod CIDR, работает DNS внутри кластера, есть StorageCl
 `Hello World!` и пишет запрос в access-лог, Gateway получил IP ноды и отдаёт `Hello World!`
 по HTTP и HTTPS, работают маршрутизация по path и разделение трафика v1/v2, Prometheus
 видит target'ы приложения и Envoy в состоянии `up`, запрос `nginx_http_requests_total`
-возвращает данные, Grafana и Prometheus открываются через Gateway.
+возвращает данные, Grafana и Prometheus открываются через Gateway, запрос к приложению
+через Gateway находится в Loki LogQL-запросом, в Grafana подключён источник Loki.
 
 После деплоя kubeconfig лежит в `~/.kube/config` у пользователя, запускавшего `make deploy`.
 
@@ -43,6 +45,8 @@ pod CIDR, работает DNS внутри кластера, есть StorageCl
 | MetalLB (L2, пул из IP ноды) | 0.16.1 | `gateway` |
 | Envoy Gateway + CRD Gateway API v1.6 | 1.9.2 | `gateway` |
 | kube-prometheus-stack (Prometheus, Grafana, node-exporter, kube-state-metrics) | 91.9.0 | `monitoring` |
+| Loki (чарт grafana-community/loki, Monolithic) | 18.13.7 (Loki 3.7.8) | `logging` |
+| Fluentd (`grafana/fluent-plugin-loki`) | 3.7.8 | `logging` |
 | nginx (`nginxinc/nginx-unprivileged`) | 1.30.5-alpine | `app` |
 | nginx-prometheus-exporter | 1.5.3 | `app` |
 
@@ -60,7 +64,7 @@ nginx в namespace `demo` в двух версиях: Deployment `hello-v1` (2 �
 На любой путь отвечает `Hello World!`, `/healthz` используется пробами.
 
 Access-лог пишется в stdout в JSON, по строке на запрос; error-лог в stderr.
-Kubernetes сохраняет их в `/var/log/containers/`, откуда их заберёт сборщик логов.
+Kubernetes сохраняет их в `/var/log/containers/`, оттуда их забирает Fluentd (см. «Логи»).
 
 Проверка с ноды:
 
@@ -159,6 +163,41 @@ kubectl -n monitoring get secret monitoring-admin -o jsonpath='{.data.admin-pass
 P=$(kubectl -n monitoring get svc kps-prometheus -o jsonpath='{.spec.clusterIP}')
 curl -s "http://$P:9090/api/v1/targets?state=active" | jq '.data.activeTargets[] | select(.labels.namespace=="demo") | {pod: .labels.pod, health}'
 curl -s "http://$P:9090/api/v1/query" --data-urlencode 'query=sum by (version) (nginx_http_requests_total)' | jq .data.result
+```
+
+## Логи
+
+Fluentd (DaemonSet в namespace `logging`) читает `/var/log/containers/*_demo_*.log` на ноде,
+разбирает формат CRI и отправляет строки в Loki (`http://loki.logging.svc:3100`).
+Позиции чтения и буфер лежат в `/var/lib/fluentd` на ноде, поэтому после перезапуска пода
+логи не теряются и не дублируются.
+
+Метки потока в Loki: `namespace`, `workload` (`hello-v1`/`hello-v2`), `pod`, `container`
+(`nginx` или `exporter`), `stream` (`stdout` — access-лог, `stderr` — error-лог), `job="fluentd"`.
+Сама строка остаётся JSON access-лога nginx, поля достаются в запросе через `| json`.
+
+Loki в режиме Monolithic (один под), хранение на файловой системе, PVC 5 ГБ на local-path.
+В Grafana источник `Loki` добавлен автоматически, на дашборде **Hello app** есть панель логов;
+произвольные запросы — в Explore.
+
+Примеры LogQL:
+
+```logql
+{namespace="demo", container="nginx", stream="stdout"}
+{namespace="demo", container="nginx"} | json | status >= 400
+{namespace="demo", container="nginx", stream="stderr"}
+sum by (workload) (count_over_time({namespace="demo", container="nginx", stream="stdout"}[5m]))
+```
+
+Проверка с ноды:
+
+```bash
+IP=$(kubectl -n gateway get gateway public -o jsonpath='{.status.addresses[0].value}')
+curl -s http://$IP/my-test-request
+L=$(kubectl -n logging get svc loki -o jsonpath='{.spec.clusterIP}')
+curl -sG "http://$L:3100/loki/api/v1/query_range" --data-urlencode since=5m \
+  --data-urlencode 'query={namespace="demo", container="nginx"} |= "/my-test-request" | json' |
+  jq -r '.data.result[].values[][1]'
 ```
 
 ## Команды
