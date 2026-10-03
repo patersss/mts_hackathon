@@ -42,5 +42,7 @@ jobs:
           kubectl -n calico-system describe pods || true
           kubectl -n calico-system logs --all-containers --tail=100 -l k8s-app=calico-node || true
           kubectl -n tigera-operator logs --tail=100 deploy/tigera-operator || true
+          kubectl -n demo describe pods || true
+          kubectl -n demo logs --tail=50 -l app=hello || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -60 || true
           sudo journalctl -u kubelet --no-pager | tail -60 || true

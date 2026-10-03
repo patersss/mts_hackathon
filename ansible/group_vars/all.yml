@@ -12,6 +12,7 @@ loki_chart_version: "18.13.7"
 fluentd_image: "grafana/fluent-plugin-loki:3.7.8"
 nginx_image: "nginxinc/nginx-unprivileged:1.30.5-alpine"
 nginx_exporter_image: "nginx/nginx-prometheus-exporter:1.5.3"
+app_namespace: "demo"
 
 pod_cidr: "10.244.0.0/16"
 service_cidr: "10.96.0.0/12"
