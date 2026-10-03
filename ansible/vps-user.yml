@@ -1,0 +1,36 @@
+- name: Create deploy user on VPS
+  hosts: all
+  gather_facts: false
+  vars:
+    vps_user: "{{ lookup('env', 'VPS_USER') | default('deploy', true) }}"
+  tasks:
+    - name: Create user
+      ansible.builtin.user:
+        name: "{{ vps_user }}"
+        shell: /bin/bash
+        groups: sudo
+        append: true
+
+    - name: Allow sudo without password
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/{{ vps_user }}"
+        content: "{{ vps_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        mode: "0440"
+        validate: visudo -cf %s
+
+    - name: Create ssh dir
+      ansible.builtin.file:
+        path: "/home/{{ vps_user }}/.ssh"
+        state: directory
+        owner: "{{ vps_user }}"
+        group: "{{ vps_user }}"
+        mode: "0700"
+
+    - name: Copy root authorized keys
+      ansible.builtin.copy:
+        src: /root/.ssh/authorized_keys
+        dest: "/home/{{ vps_user }}/.ssh/authorized_keys"
+        remote_src: true
+        owner: "{{ vps_user }}"
+        group: "{{ vps_user }}"
+        mode: "0600"

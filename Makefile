@@ -9,7 +9,7 @@ verify:
 lint:
 	shellcheck deploy.sh scripts/*.sh
 	yamllint .
-	ansible-lint ansible/site.yml
+	ansible-lint ansible/site.yml ansible/vps-user.yml
 
 destroy:
 	ansible-playbook ansible/destroy.yml
