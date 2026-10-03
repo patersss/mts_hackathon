@@ -149,14 +149,15 @@ make verify
 
 ### Автоматически
 
-`make verify` выполняет 28 проверок и завершается с ненулевым кодом, если хоть одна упала:
+`make verify` выполняет 37 проверок и завершается с ненулевым кодом, если хоть одна упала:
 нода `Ready` без DiskPressure и MemoryPressure, все поды `Running`, адреса подов из pod CIDR,
 DNS внутри кластера, StorageClass по умолчанию, приложение отвечает `Hello World!` и пишет
 запрос в access-лог, Gateway `Programmed` и получил IP ноды, HTTPRoute `Accepted`, HTTP и
 HTTPS через Gateway отдают `Hello World!`, работают маршруты `/v1` и `/v2` и сплит v1/v2,
 Prometheus видит target'ы приложения и Envoy в состоянии `up`, запрос
 `nginx_http_requests_total` возвращает данные, Grafana и Prometheus открываются через Gateway,
-запрос к приложению через Gateway находится в Loki LogQL-запросом, в Grafana подключён Loki,
+запрос к приложению через Gateway находится в Loki LogQL-запросом, в том числе по `request_id`
+из заголовка ответа `X-Request-ID`, в Loki включён срок хранения 72 часа, в Grafana подключён Loki,
 NetworkPolicy созданы, а под из namespace `default` не достаёт до приложения и Loki напрямую.
 
 ```text
@@ -164,6 +165,9 @@ OK   node Ready
 ...
 OK   app request found in Loki (LogQL)
 OK   Grafana Loki datasource
+OK   X-Request-ID in nginx access log
+OK   LogQL by request_id finds one line
+OK   Loki retention 72h
 OK   NetworkPolicy in demo and logging
 OK   NetworkPolicy: default -> app blocked
 OK   NetworkPolicy: default -> Loki blocked
@@ -211,6 +215,8 @@ nginx в namespace `demo` в двух версиях: Deployment `hello-v1` (2 �
 На любой путь отвечает `Hello World!`, `/healthz` используется пробами.
 
 Access-лог пишется в stdout в JSON, по строке на запрос; error-лог в stderr.
+Поле `request_id` берётся из заголовка `X-Request-ID`, который Envoy генерирует для каждого
+запроса и возвращает клиенту, так что запрос из ответа легко найти в логах.
 Kubernetes сохраняет их в `/var/log/containers/`, оттуда их забирает Fluentd (см. «Логи»).
 
 Проверка с ноды без Gateway:
@@ -223,7 +229,7 @@ kubectl -n demo logs -l app=hello --tail=5
 Пример строки лога:
 
 ```json
-{"time":"2026-10-03T18:00:00+00:00","remote_addr":"10.244.0.1","x_forwarded_for":"","host":"10.96.12.34","method":"GET","uri":"/","status":200,"bytes":13,"request_time":0.000,"user_agent":"curl/8.5.0","version":"v1"}
+{"time":"2026-10-03T18:00:00+00:00","remote_addr":"10.244.0.1","x_forwarded_for":"","host":"10.96.12.34","method":"GET","uri":"/","status":200,"bytes":13,"request_time":0.000,"user_agent":"curl/8.5.0","version":"v1","request_id":"5f0c1b9e-3d2a-4c7e-9b1f-2a6d8e4c0f13"}
 ```
 
 ## Gateway API
@@ -267,7 +273,7 @@ curl -sI http://grafana.${IP//./-}.nip.io/ | head -3
 
 ## Мониторинг
 
-kube-prometheus-stack (Helm) в namespace `monitoring`: Prometheus (хранение 3 дня, PVC 5 ГБ на
+kube-prometheus-stack (Helm) в namespace `monitoring`: Prometheus (хранение 1 день, PVC 5 ГБ на
 local-path), Grafana, node-exporter, kube-state-metrics. Alertmanager выключен.
 
 Что собирается:
@@ -349,6 +355,7 @@ Fluentd (DaemonSet в namespace `logging`) читает `/var/log/containers/*_d
 Сама строка остаётся JSON access-лога nginx, поля достаются в запросе через `| json`.
 
 Loki в режиме Monolithic (один под), хранение на файловой системе, PVC 5 ГБ на local-path.
+Срок хранения 72 часа: compactor удаляет старые данные (`retention_enabled`, `retention_period`).
 В Grafana источник `Loki` добавлен автоматически, на дашборде **Hello app** есть панель логов;
 произвольные запросы — в Explore.
 
@@ -357,6 +364,7 @@ Loki в режиме Monolithic (один под), хранение на фай�
 ```logql
 {namespace="demo", container="nginx", stream="stdout"}
 {namespace="demo", container="nginx"} | json | status >= 400
+{namespace="demo"} | json | request_id="<X-Request-ID из ответа>"
 {namespace="demo", container="nginx", stream="stderr"}
 sum by (workload) (count_over_time({namespace="demo", container="nginx", stream="stdout"}[5m]))
 ```
@@ -405,13 +413,14 @@ Gateway API:
   latency p50/p95), CPU/RAM подов и ноды;
 - дашборд Grafana **Hello app** из ConfigMap: RPS, коды ответов, задержки, CPU/RAM, логи;
 - алерты `HelloDown` и `Hello5xx`;
-- централизованное хранение логов в Loki с поиском LogQL и просмотром в Grafana;
+- централизованное хранение логов в Loki с поиском LogQL и просмотром в Grafana, срок хранения 72 часа;
+- сквозной `X-Request-ID`: Envoy возвращает его в ответе, nginx пишет в лог, запрос ищется в Loki по id;
 - метрики control-plane (etcd, scheduler, controller-manager, kube-proxy).
 
 Автоматизация и CI/CD:
 
 - деплой одной командой, только Ansible и Helm, все версии закреплены;
-- 28 smoke-тестов в `make verify`;
+- 37 smoke-тестов в `make verify`;
 - CI: линтеры, gitleaks, e2e с двойным деплоем на чистой Ubuntu 24.04;
 - CD на VPS от непривилегированного пользователя с sudo.
 
@@ -448,9 +457,10 @@ PVC для Prometheus и Loki, буфер Fluentd на диске.
 - Смена IP ноды после деплоя не поддерживается: адрес вшит в сертификаты kubeadm и Gateway,
   нужно `make destroy` и `make deploy`.
 - Данные Prometheus и Loki лежат на диске ноды (local-path), без репликации и бэкапов.
-  Для Loki срок хранения не задан, место ограничено PVC 5 ГБ.
+  Срок хранения Loki 72 часа, Prometheus 1 день.
 - Alertmanager выключен: алерты видны в Prometheus, но никуда не отправляются.
-- Fluentd собирает логи только namespace `demo`.
+- Fluentd собирает логи только namespace `demo`. Метрик самого Fluentd нет: в образе
+  `grafana/fluent-plugin-loki` нет `fluent-plugin-prometheus`, свой образ не собираем.
 - NetworkPolicy закрывают только `demo` и Loki; остальные namespace (системные, мониторинг)
   без ограничений.
 

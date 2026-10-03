@@ -227,6 +227,34 @@ app_log_in_loki() {
   done
 }
 
+# id, который Envoy вернул в X-Request-ID, nginx пишет в поле request_id
+request_id_in_access_log() {
+  local deadline=$((SECONDS + 30))
+  REQUEST_ID=$(gw_curl -o /dev/null -D - "http://$(gateway_ip)/" | tr -d '\r' |
+    awk 'tolower($1)=="x-request-id:"{print $2}')
+  [[ -n "${REQUEST_ID}" ]] || return 1
+  until kubectl -n "${APP_NS}" logs -l app=hello --tail=200 | grep -qF "\"request_id\":\"${REQUEST_ID}\""; do
+    [[ ${SECONDS} -lt ${deadline} ]] || return 1
+    sleep 2
+  done
+}
+
+request_id_in_loki() {
+  local deadline=$((SECONDS + 120))
+  [[ -n "${REQUEST_ID:-}" ]] || return 1
+  until [[ "$(loki_query "{namespace=\"${APP_NS}\"} | json | request_id=\"${REQUEST_ID}\"" | wc -l)" == 1 ]]; do
+    [[ ${SECONDS} -lt ${deadline} ]] || return 1
+    sleep 5
+  done
+}
+
+# конфиг работающего Loki через apiserver proxy (с ноды в Loki пускает NetworkPolicy)
+loki_retention() {
+  local cfg
+  cfg=$(kubectl get --raw /api/v1/namespaces/logging/services/loki:3100/proxy/config) || return 1
+  grep -qx '  retention_enabled: true' <<<"${cfg}" && grep -Eqx '  retention_period: (72h|3d)' <<<"${cfg}"
+}
+
 grafana_loki_datasource() {
   gw_host grafana /api/datasources/uid/loki/health -f -u "admin:$(admin_password)" | grep -q '"status":"OK"'
 }
@@ -274,6 +302,9 @@ check "Prometheus via Gateway with basic auth" prometheus_auth
 check "Loki and Fluentd ready" loki_ready
 check "app request found in Loki (LogQL)" app_log_in_loki
 check "Grafana Loki datasource" grafana_loki_datasource
+check "X-Request-ID in nginx access log" request_id_in_access_log
+check "LogQL by request_id finds one line" request_id_in_loki
+check "Loki retention 72h" loki_retention
 check "NetworkPolicy in demo and logging" networkpolicies
 check "NetworkPolicy: default -> app blocked" blocked_from_default "http://hello.${APP_NS}.svc.cluster.local/"
 check "NetworkPolicy: default -> Loki blocked" blocked_from_default http://loki.logging.svc.cluster.local:3100/ready
