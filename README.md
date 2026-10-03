@@ -6,7 +6,7 @@
 
 - Ubuntu 24.04 LTS, 2+ vCPU, 4+ ГБ RAM.
 - Пользователь с правами sudo (не root).
-- Доступ в интернет: apt, pkgs.k8s.io, get.helm.sh, metallb.github.io, Docker Hub, quay.io.
+- Доступ в интернет: apt, pkgs.k8s.io, get.helm.sh, metallb.github.io, prometheus-community.github.io, Docker Hub, quay.io.
 - Свободные порты 80 и 443 на IP ноды.
 
 ## Развёртывание
@@ -25,7 +25,9 @@ make verify
 `make verify` — smoke-тесты: нода `Ready`, все поды в рабочем состоянии, адреса подов из
 pod CIDR, работает DNS внутри кластера, есть StorageClass по умолчанию, приложение отвечает
 `Hello World!` и пишет запрос в access-лог, Gateway получил IP ноды и отдаёт `Hello World!`
-по HTTP и HTTPS, работают маршрутизация по path и разделение трафика v1/v2.
+по HTTP и HTTPS, работают маршрутизация по path и разделение трафика v1/v2, Prometheus
+видит target'ы приложения и Envoy в состоянии `up`, запрос `nginx_http_requests_total`
+возвращает данные, Grafana и Prometheus открываются через Gateway.
 
 После деплоя kubeconfig лежит в `~/.kube/config` у пользователя, запускавшего `make deploy`.
 
@@ -40,7 +42,9 @@ pod CIDR, работает DNS внутри кластера, есть StorageCl
 | Helm | 3.22.0 | `kubernetes` |
 | MetalLB (L2, пул из IP ноды) | 0.16.1 | `gateway` |
 | Envoy Gateway + CRD Gateway API v1.6 | 1.9.2 | `gateway` |
+| kube-prometheus-stack (Prometheus, Grafana, node-exporter, kube-state-metrics) | 91.9.0 | `monitoring` |
 | nginx (`nginxinc/nginx-unprivileged`) | 1.30.5-alpine | `app` |
+| nginx-prometheus-exporter | 1.5.3 | `app` |
 
 Подготовка узла (swap, модули ядра, sysctl, пакеты) — роль `prereqs`.
 Все версии закреплены в `ansible/group_vars/all.yml`.
@@ -96,6 +100,65 @@ curl -k https://$IP/
 curl -k https://hello.${IP//./-}.nip.io/
 curl -sI http://$IP/v2 | grep -i x-app-version
 for i in $(seq 20); do curl -sI http://$IP/ | grep -i x-app-version; done | sort | uniq -c
+```
+
+## Мониторинг
+
+kube-prometheus-stack в namespace `monitoring`: Prometheus (хранение 3 дня, PVC 5 ГБ на
+local-path), Grafana, node-exporter, kube-state-metrics. Alertmanager выключен.
+
+Что собирается:
+
+| Target (`job`) | Откуда | Что даёт |
+|---|---|---|
+| `demo/hello` | PodMonitor, sidecar nginx-prometheus-exporter в каждом поде (`:9113`, читает `stub_status` nginx) | запросы и соединения nginx |
+| `envoy-gateway-system/envoy-proxy` | PodMonitor, Envoy (`:19001/stats/prometheus`) | запросы, коды ответов и задержки на Gateway |
+| `envoy-gateway` | ServiceMonitor контроллера Envoy Gateway | состояние контроллера |
+| `kubelet`, `node-exporter`, `kube-state-metrics`, `apiserver`, `coredns`, etcd, scheduler, controller-manager, kube-proxy | встроены в чарт | CPU/RAM подов и ноды, состояние объектов Kubernetes |
+
+Основные метрики приложения:
+
+| Метрика | Тип | Смысл |
+|---|---|---|
+| `up{job="demo/hello"}` | gauge | 1, если Prometheus смог опросить экспортер пода |
+| `nginx_up` | gauge | 1, если экспортер достучался до `stub_status` nginx |
+| `nginx_http_requests_total` | counter | всего обработано HTTP-запросов, метка `version` = v1/v2 |
+| `nginx_connections_active` | gauge | открытые клиентские соединения |
+| `nginx_connections_accepted`, `nginx_connections_handled` | counter | принятые и обработанные соединения; разница — отброшенные |
+| `envoy_cluster_upstream_rq_xx{envoy_response_code_class}` | counter | ответы приложения через Gateway по классам кодов (2xx, 5xx) |
+| `envoy_cluster_upstream_rq_time_bucket` | histogram | время ответа приложения через Gateway, мс |
+| `container_cpu_usage_seconds_total`, `container_memory_working_set_bytes` | counter / gauge | CPU и память контейнеров |
+
+Примеры запросов:
+
+```promql
+up{job="demo/hello"}
+sum by (version) (rate(nginx_http_requests_total[1m]))
+sum by (envoy_response_code_class) (rate(envoy_cluster_upstream_rq_xx{envoy_cluster_name=~"httproute/demo/hello/.*"}[5m]))
+histogram_quantile(0.95, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{envoy_cluster_name=~"httproute/demo/hello/.*"}[5m])))
+```
+
+Алерты (PrometheusRule `demo/hello`): `HelloDown` — нет ни одного живого экспортера 2 минуты,
+`Hello5xx` — больше 0.1 ответов 5xx в секунду через Gateway 5 минут.
+
+Доступ через Gateway (HTTP перенаправляется на HTTPS):
+
+- Grafana: `https://grafana.<ip-с-дефисами>.nip.io/`, дашборд **Hello app** (RPS по версиям,
+  коды ответов, p50/p95, CPU и память подов) плюс стандартные дашборды чарта.
+- Prometheus: `https://prometheus.<ip-с-дефисами>.nip.io/`, basic auth.
+
+Логин `admin`, пароль генерируется при первом деплое и хранится только в кластере:
+
+```bash
+kubectl -n monitoring get secret monitoring-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo
+```
+
+Проверка с ноды без Gateway:
+
+```bash
+P=$(kubectl -n monitoring get svc kps-prometheus -o jsonpath='{.spec.clusterIP}')
+curl -s "http://$P:9090/api/v1/targets?state=active" | jq '.data.activeTargets[] | select(.labels.namespace=="demo") | {pod: .labels.pod, health}'
+curl -s "http://$P:9090/api/v1/query" --data-urlencode 'query=sum by (version) (nginx_http_requests_total)' | jq .data.result
 ```
 
 ## Команды

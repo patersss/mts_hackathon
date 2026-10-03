@@ -43,6 +43,14 @@ data:
           return 200 "ok\n";
         }
       }
+
+      server {
+        listen 127.0.0.1:8081;
+        access_log off;
+        location = /stub_status {
+          stub_status;
+        }
+      }
     }
 ---
 apiVersion: apps/v1
@@ -61,6 +69,8 @@ spec:
       labels:
         app: hello
         version: {{ version }}
+      annotations:
+        kubectl.kubernetes.io/default-container: nginx
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -87,6 +97,19 @@ spec:
           volumeMounts:
             - {name: config, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf}
             - {name: tmp, mountPath: /tmp}
+        - name: exporter
+          image: {{ nginx_exporter_image }}
+          args: [--nginx.scrape-uri=http://127.0.0.1:8081/stub_status]
+          ports:
+            - name: metrics
+              containerPort: 9113
+          resources:
+            requests: {cpu: 5m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 32Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
       volumes:
         - name: config
           configMap:
@@ -154,3 +177,38 @@ spec:
     - backendRefs:
         - {name: hello-v1, port: 80, weight: 80}
         - {name: hello-v2, port: 80, weight: 20}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: hello
+  namespace: {{ app_namespace }}
+spec:
+  podTargetLabels: [version]
+  selector:
+    matchLabels:
+      app: hello
+  podMetricsEndpoints:
+    - port: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: hello
+  namespace: {{ app_namespace }}
+spec:
+  groups:
+    - name: hello
+      rules:
+        - alert: HelloDown
+          expr: sum(nginx_up{namespace="{{ app_namespace }}"}) == 0 or absent(nginx_up{namespace="{{ app_namespace }}"})
+          for: 2m
+          labels: {severity: critical}
+          annotations:
+            summary: Нет живых подов hello
+        - alert: Hello5xx
+          expr: sum(rate(envoy_cluster_upstream_rq_xx{envoy_response_code_class="5", envoy_cluster_name=~"httproute/{{ app_namespace }}/hello/.*"}[5m])) > 0.1
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: Ответы 5xx от hello через Gateway

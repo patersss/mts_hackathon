@@ -1,0 +1,63 @@
+- name: Monitoring namespace
+  ansible.builtin.command: kubectl --kubeconfig {{ kubeconfig }} create namespace monitoring
+  register: monitoring_ns
+  changed_when: monitoring_ns.rc == 0
+  failed_when: monitoring_ns.rc != 0 and 'AlreadyExists' not in monitoring_ns.stderr
+
+# пароль генерируется один раз, повторный деплой его не меняет
+- name: Admin password secret
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ kubeconfig }} -n monitoring create secret generic monitoring-admin
+    --from-literal=admin-user=admin
+    --from-literal=admin-password={{ lookup('ansible.builtin.password', '/dev/null', chars=['ascii_letters', 'digits'], length=24) }}
+  register: monitoring_secret
+  changed_when: monitoring_secret.rc == 0
+  failed_when: monitoring_secret.rc != 0 and 'already exists' not in monitoring_secret.stderr
+  no_log: true
+
+- name: Prometheus stack
+  kubernetes.core.helm:
+    name: kps
+    chart_ref: kube-prometheus-stack
+    chart_repo_url: https://prometheus-community.github.io/helm-charts
+    chart_version: "{{ kube_prometheus_stack_version }}"
+    release_namespace: monitoring
+    kubeconfig: "{{ kubeconfig }}"
+    wait: true
+    timeout: 10m
+    values: "{{ lookup('ansible.builtin.template', 'kps-values.yaml.j2') | from_yaml }}"
+
+# Envoy Gateway принимает htpasswd только в формате {SHA}
+- name: Prometheus basic auth hash
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      kubectl --kubeconfig {{ kubeconfig }} -n monitoring get secret monitoring-admin
+      -o jsonpath='{.data.admin-password}' | base64 -d | openssl dgst -binary -sha1 | base64
+    executable: /bin/bash
+  register: monitoring_sha1
+  changed_when: false
+  no_log: true
+
+- name: Prometheus basic auth secret
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig {{ kubeconfig }} apply -f -
+    stdin: |
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: prometheus-basic-auth
+        namespace: monitoring
+      stringData:
+        .htpasswd: "admin:{SHA}{{ monitoring_sha1.stdout }}"
+  register: monitoring_auth
+  changed_when: monitoring_auth.stdout is search('created|configured')
+  no_log: true
+
+- name: Monitoring manifests
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig {{ kubeconfig }} apply -f -
+    stdin: "{{ lookup('ansible.builtin.template', item) }}"
+  loop: [monitoring.yaml.j2, dashboard.yaml.j2]
+  register: monitoring_apply
+  changed_when: monitoring_apply.stdout is search('created|configured')

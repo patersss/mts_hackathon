@@ -1,0 +1,29 @@
+fullnameOverride: kps
+alertmanager:
+  enabled: false
+prometheus:
+  prometheusSpec:
+    retention: 3d
+    scrapeInterval: 15s
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    resources:
+      requests: {cpu: 100m, memory: 512Mi}
+      limits: {memory: 1536Mi}
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 5Gi
+grafana:
+  admin:
+    existingSecret: monitoring-admin
+  grafana.ini:
+    server:
+      root_url: https://{{ grafana_host }}
+  sidecar:
+    dashboards:
+      searchNamespace: ALL
