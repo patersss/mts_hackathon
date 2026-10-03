@@ -33,6 +33,8 @@ default_storageclass() {
 }
 
 check "node Ready" kubectl wait node --all --for=condition=Ready --timeout=120s
+check "no DiskPressure" kubectl wait node --all --for=condition=DiskPressure=false --timeout=10s
+check "no MemoryPressure" kubectl wait node --all --for=condition=MemoryPressure=false --timeout=10s
 check "pods Running" pods_running
 check "pod IP from pod CIDR" pods_in_pod_cidr
 check "cluster DNS" cluster_dns

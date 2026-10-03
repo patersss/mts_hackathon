@@ -16,6 +16,13 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
+      # на раннере свободно меньше 10% диска, kubelet уходит в DiskPressure и вытесняет поды
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/powershell /usr/share/swift
+          sudo docker system prune -af --volumes
+          df -h /
       - name: Deploy
         timeout-minutes: 25
         run: make deploy
