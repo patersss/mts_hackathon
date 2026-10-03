@@ -15,6 +15,14 @@
   failed_when: monitoring_secret.rc != 0 and 'already exists' not in monitoring_secret.stderr
   no_log: true
 
+# Grafana монтирует этот ConfigMap, он нужен до её старта
+- name: Grafana dashboard
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig {{ kubeconfig }} apply -f -
+    stdin: "{{ lookup('ansible.builtin.template', 'dashboard.yaml.j2') }}"
+  register: monitoring_dashboard
+  changed_when: monitoring_dashboard.stdout is search('created|configured')
+
 - name: Prometheus stack
   kubernetes.core.helm:
     name: kps
@@ -57,7 +65,6 @@
 - name: Monitoring manifests
   ansible.builtin.command:
     cmd: kubectl --kubeconfig {{ kubeconfig }} apply -f -
-    stdin: "{{ lookup('ansible.builtin.template', item) }}"
-  loop: [monitoring.yaml.j2, dashboard.yaml.j2]
+    stdin: "{{ lookup('ansible.builtin.template', 'monitoring.yaml.j2') }}"
   register: monitoring_apply
   changed_when: monitoring_apply.stdout is search('created|configured')

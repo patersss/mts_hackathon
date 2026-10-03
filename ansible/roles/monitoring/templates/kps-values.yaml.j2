@@ -1,16 +1,45 @@
 fullnameOverride: kps
 alertmanager:
   enabled: false
+# метрики control plane для задания не нужны, у apiserver больше всего серий
+kubeApiServer:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+coreDns:
+  enabled: false
+defaultRules:
+  rules:
+    etcd: false
+    kubeApiserverAvailability: false
+    kubeApiserverBurnrate: false
+    kubeApiserverHistogram: false
+    kubeApiserverSlos: false
+    kubeControllerManager: false
+    kubeProxy: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    windows: false
+kubelet:
+  serviceMonitor:
+    probes: false
 prometheus:
   prometheusSpec:
-    retention: 3d
-    scrapeInterval: 15s
+    retention: 1d
+    retentionSize: 1GB
+    scrapeInterval: 30s
     serviceMonitorSelectorNilUsesHelmValues: false
     podMonitorSelectorNilUsesHelmValues: false
     ruleSelectorNilUsesHelmValues: false
     resources:
-      requests: {cpu: 100m, memory: 512Mi}
-      limits: {memory: 1536Mi}
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {memory: 1Gi}
     storageSpec:
       volumeClaimTemplate:
         spec:
@@ -24,12 +53,35 @@ grafana:
   grafana.ini:
     server:
       root_url: https://{{ grafana_host }}
-  additionalDataSources:
-    - name: Loki
-      uid: loki
-      type: loki
-      access: proxy
-      url: http://loki.logging.svc:3100
+  defaultDashboardsEnabled: false
+  # без сайдкаров: datasource и дашборд монтируются файлами, экономит два python-процесса
   sidecar:
     dashboards:
-      searchNamespace: ALL
+      enabled: false
+    datasources:
+      enabled: false
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          uid: prometheus
+          type: prometheus
+          access: proxy
+          url: http://kps-prometheus.monitoring.svc:9090
+          isDefault: true
+        - name: Loki
+          uid: loki
+          type: loki
+          access: proxy
+          url: http://loki.logging.svc:3100
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: default
+          type: file
+          options:
+            path: /var/lib/grafana/dashboards/default
+  dashboardsConfigMaps:
+    default: dashboard-hello

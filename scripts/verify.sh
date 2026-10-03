@@ -278,5 +278,5 @@ check "NetworkPolicy in demo and logging" networkpolicies
 check "NetworkPolicy: default -> app blocked" blocked_from_default "http://hello.${APP_NS}.svc.cluster.local/"
 check "NetworkPolicy: default -> Loki blocked" blocked_from_default http://loki.logging.svc.cluster.local:3100/ready
 
-echo "INFO MemAvailable $(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo) MB"
+"$(dirname "$0")/mem-report.sh"
 exit "${failed}"
