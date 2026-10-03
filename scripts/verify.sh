@@ -233,7 +233,8 @@ request_id_in_access_log() {
   REQUEST_ID=$(gw_curl -o /dev/null -D - "http://$(gateway_ip)/" | tr -d '\r' |
     awk 'tolower($1)=="x-request-id:"{print $2}')
   [[ -n "${REQUEST_ID}" ]] || return 1
-  until kubectl -n "${APP_NS}" logs -l app=hello --tail=200 | grep -qF "\"request_id\":\"${REQUEST_ID}\""; do
+  # без -q: grep дочитывает вывод, иначе kubectl получает SIGPIPE и pipefail роняет проверку
+  until kubectl -n "${APP_NS}" logs -l app=hello --tail=200 | grep -F "\"request_id\":\"${REQUEST_ID}\"" >/dev/null; do
     [[ ${SECONDS} -lt ${deadline} ]] || return 1
     sleep 2
   done
