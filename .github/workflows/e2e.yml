@@ -1,0 +1,28 @@
+name: e2e
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  kubeadm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Deploy
+        run: make deploy
+      - name: Verify
+        run: make verify
+      - name: Redeploy (idempotency)
+        run: make deploy
+      - name: Verify again
+        run: make verify
+      - name: Dump cluster state
+        if: failure()
+        run: |
+          kubectl get all -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -100 || true
+          sudo journalctl -u kubelet --no-pager | tail -200 || true

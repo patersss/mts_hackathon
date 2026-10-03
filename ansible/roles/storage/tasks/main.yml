@@ -1,0 +1,12 @@
+- name: Local path provisioner
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ kubeconfig }} apply --server-side -f
+    https://raw.githubusercontent.com/rancher/local-path-provisioner/v{{ local_path_version }}/deploy/local-path-storage.yaml
+  register: storage_lpp
+  changed_when: "'serverside-applied' in storage_lpp.stdout and 'unchanged' not in storage_lpp.stdout"
+
+- name: Default StorageClass
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ kubeconfig }} annotate storageclass local-path
+    storageclass.kubernetes.io/is-default-class=true --overwrite
+  changed_when: false
