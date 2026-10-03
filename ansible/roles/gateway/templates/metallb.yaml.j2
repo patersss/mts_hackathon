@@ -1,0 +1,17 @@
+# единственный адрес пула — IP ноды, поэтому Gateway слушает 80/443 прямо на нём
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: node
+  namespace: metallb-system
+spec:
+  addresses:
+    - {{ node_ip }}/32
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: node
+  namespace: metallb-system
+spec:
+  ipAddressPools: [node]

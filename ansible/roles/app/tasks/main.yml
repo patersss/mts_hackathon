@@ -8,5 +8,6 @@
 - name: Wait for app rollout
   ansible.builtin.command: >-
     kubectl --kubeconfig {{ kubeconfig }} -n {{ app_namespace }}
-    rollout status deployment/hello --timeout=180s
+    rollout status deployment/hello-{{ item }} --timeout=180s
+  loop: [v1, v2]
   changed_when: false

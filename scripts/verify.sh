@@ -46,7 +46,7 @@ app_url() {
 }
 
 app_hello() {
-  kubectl -n "${APP_NS}" rollout status deployment/hello --timeout=120s &&
+  kubectl -n "${APP_NS}" rollout status deployment -l app=hello --timeout=120s &&
     curl -fsS --retry 5 --retry-all-errors --max-time 5 "$(app_url /)" | grep -qx 'Hello World!'
 }
 
@@ -60,6 +60,53 @@ app_access_log() {
   done
 }
 
+gateway_ip() {
+  kubectl -n gateway get gateway public -o jsonpath='{.status.addresses[0].value}'
+}
+
+gateway_programmed() {
+  kubectl -n gateway wait gateway/public --for=condition=Programmed --timeout=120s
+}
+
+gateway_on_node_ip() {
+  local node_ip
+  node_ip=$(kubectl get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+  [[ -n "${node_ip}" && "$(gateway_ip)" == "${node_ip}" ]]
+}
+
+route_accepted() {
+  kubectl -n "${APP_NS}" wait httproute/hello --timeout=60s \
+    --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True
+}
+
+gw_curl() {
+  curl -ksS --retry 5 --retry-all-errors --max-time 5 "$@"
+}
+
+gateway_http() {
+  gw_curl "http://$(gateway_ip)/" | grep -qx 'Hello World!'
+}
+
+gateway_https() {
+  gw_curl "https://$(gateway_ip)/" | grep -qx 'Hello World!'
+}
+
+gateway_path() {
+  local v
+  for v in v1 v2; do
+    gw_curl -o /dev/null -D - "http://$(gateway_ip)/${v}" | grep -qi "^x-app-version: ${v}" || return 1
+  done
+}
+
+# 80/20 между v1 и v2: за 50 запросов должны встретиться обе версии
+gateway_split() {
+  local ip seen
+  ip=$(gateway_ip)
+  seen=$(for _ in $(seq 50); do gw_curl -o /dev/null -D - "http://${ip}/"; done |
+    grep -i '^x-app-version:' | tr -d '\r' | awk '{print $2}' | sort -u | tr '\n' ' ')
+  [[ "${seen}" == "v1 v2 " ]]
+}
+
 check "node Ready" kubectl wait node --all --for=condition=Ready --timeout=120s
 check "no DiskPressure" kubectl wait node --all --for=condition=DiskPressure=false --timeout=10s
 check "no MemoryPressure" kubectl wait node --all --for=condition=MemoryPressure=false --timeout=10s
@@ -69,5 +116,12 @@ check "cluster DNS" cluster_dns
 check "default StorageClass" default_storageclass
 check "app answers Hello World" app_hello
 check "app access log" app_access_log
+check "Gateway Programmed" gateway_programmed
+check "Gateway address is node IP" gateway_on_node_ip
+check "HTTPRoute Accepted" route_accepted
+check "Gateway HTTP :80 Hello World" gateway_http
+check "Gateway HTTPS :443 Hello World" gateway_https
+check "Gateway path routing /v1 /v2" gateway_path
+check "Gateway traffic split v1/v2" gateway_split
 
 exit "${failed}"
