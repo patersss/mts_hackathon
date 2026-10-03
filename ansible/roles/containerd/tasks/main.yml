@@ -1,0 +1,34 @@
+- name: Gather installed packages
+  ansible.builtin.package_facts:
+
+# На машинах с Docker уже стоит containerd.io, ставить второй пакет нельзя
+- name: Install containerd
+  ansible.builtin.apt:
+    name: containerd
+  when: "'containerd.io' not in ansible_facts.packages"
+
+- name: Check containerd config
+  ansible.builtin.slurp:
+    src: /etc/containerd/config.toml
+  register: containerd_cfg
+  failed_when: false
+
+- name: Generate default containerd config
+  ansible.builtin.shell: |
+    set -o pipefail
+    mkdir -p /etc/containerd
+    containerd config default | sed 's/SystemdCgroup = false/SystemdCgroup = true/' > /etc/containerd/config.toml
+  args:
+    executable: /bin/bash
+  when: containerd_cfg.content is not defined or 'SystemdCgroup = true' not in (containerd_cfg.content | b64decode)
+  changed_when: true
+  notify: Restart containerd
+
+- name: Enable containerd
+  ansible.builtin.systemd_service:
+    name: containerd
+    enabled: true
+    state: started
+
+- name: Apply containerd config now
+  ansible.builtin.meta: flush_handlers

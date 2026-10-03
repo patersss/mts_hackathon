@@ -1,0 +1,16 @@
+apiVersion: operator.tigera.io/v1
+kind: Installation
+metadata:
+  name: default
+spec:
+  calicoNetwork:
+    bgp: Disabled
+    # не угадывать интерфейс: на хостах с docker0/podman автодетект выбирает не тот адрес
+    nodeAddressAutodetectionV4:
+      kubernetes: NodeInternalIP
+    ipPools:
+      - name: default-ipv4-ippool
+        cidr: {{ pod_cidr }}
+        encapsulation: VXLAN
+        natOutgoing: Enabled
+        nodeSelector: all()
