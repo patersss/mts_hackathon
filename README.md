@@ -19,6 +19,9 @@ make deploy
 make verify
 ```
 
+На минимальном образе Ubuntu может не быть `make`: `sudo apt-get install -y make` или
+напрямую `./deploy.sh` и `./scripts/verify.sh`.
+
 `make deploy` ставит в `.venv` ansible-core, нужные коллекции и запускает `ansible/site.yml`
 локально (`ansible_connection=local`). Повторный запуск не ломает существующий кластер:
 `kubeadm init` пропускается, манифесты применяются через `kubectl apply`.
@@ -214,6 +217,6 @@ curl -sG "http://$L:3100/loki/api/v1/query_range" --data-urlencode since=5m \
   → `make verify`. Второй проход проверяет идемпотентность.
 - `cd` — раскатка на VPS после мержа в `main` (и вручную через `workflow_dispatch`).
   Под root создаётся пользователь `deploy` с sudo (`ansible/vps-user.yml`), дальше всё от него:
-  копия репозитория, `make deploy`, `make verify`, проверка `Hello World!` снаружи по HTTP и HTTPS.
+  копия репозитория, `./deploy.sh`, `./scripts/verify.sh`, проверка `Hello World!` снаружи по HTTP и HTTPS.
   Нужны секреты репозитория `VPS_HOST` и `VPS_SSH_KEY` (приватный ключ, публичная часть в
   `/root/.ssh/authorized_keys` на VPS).

@@ -40,9 +40,9 @@ jobs:
             ssh "${VPS_USER}@${VPS_HOST}" 'mkdir -p mts_hackathon && tar xzf - -C mts_hackathon'
       - name: Deploy
         timeout-minutes: 35
-        run: ssh "${VPS_USER}@${VPS_HOST}" 'cd mts_hackathon && make deploy'
+        run: ssh "${VPS_USER}@${VPS_HOST}" 'cd mts_hackathon && ./deploy.sh'
       - name: Verify
-        run: ssh "${VPS_USER}@${VPS_HOST}" 'cd mts_hackathon && make verify'
+        run: ssh "${VPS_USER}@${VPS_HOST}" 'cd mts_hackathon && ./scripts/verify.sh'
       - name: Check from outside
         run: |
           curl -fsS --retry 5 --retry-all-errors --max-time 10 "http://${VPS_HOST}/" | grep -qx 'Hello World!'
