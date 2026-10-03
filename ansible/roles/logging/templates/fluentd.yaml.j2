@@ -1,0 +1,62 @@
+{% set fluent_conf = lookup('ansible.builtin.template', 'fluent.conf.j2') %}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fluentd
+  namespace: logging
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluentd
+  namespace: logging
+data:
+  fluent.conf: |
+{{ fluent_conf | indent(4, true) }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluentd
+  namespace: logging
+spec:
+  selector:
+    matchLabels:
+      app: fluentd
+  template:
+    metadata:
+      labels:
+        app: fluentd
+      annotations:
+        checksum/config: "{{ fluent_conf | hash('sha1') }}"
+    spec:
+      serviceAccountName: fluentd
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: fluentd
+          image: {{ fluentd_image }}
+          command: [fluentd, -c, /fluentd/etc/fluent.conf, -p, /fluentd/plugins]
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - {name: config, mountPath: /fluentd/etc}
+            - {name: varlog, mountPath: /var/log, readOnly: true}
+            - {name: state, mountPath: /var/lib/fluentd}
+      volumes:
+        - name: config
+          configMap:
+            name: fluentd
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: state
+          hostPath:
+            path: /var/lib/fluentd
+            type: DirectoryOrCreate

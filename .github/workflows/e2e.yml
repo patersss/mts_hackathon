@@ -53,5 +53,9 @@ jobs:
           kubectl get podmonitor,servicemonitor,httproute,securitypolicy -A || true
           kubectl -n monitoring logs --tail=50 -l app.kubernetes.io/name=prometheus-operator || true
           kubectl -n demo logs --tail=50 -l app=hello || true
+          kubectl -n logging get pods,pvc,svc -o wide || true
+          kubectl -n logging describe pods || true
+          kubectl -n logging logs --tail=100 -l app=fluentd || true
+          kubectl -n logging logs --tail=100 statefulset/loki || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -60 || true
           sudo journalctl -u kubelet --no-pager | tail -60 || true

@@ -1,0 +1,24 @@
+- name: Loki
+  kubernetes.core.helm:
+    name: loki
+    chart_ref: loki
+    chart_repo_url: https://grafana-community.github.io/helm-charts
+    chart_version: "{{ loki_chart_version }}"
+    release_namespace: logging
+    create_namespace: true
+    kubeconfig: "{{ kubeconfig }}"
+    wait: true
+    timeout: 10m
+    values: "{{ lookup('ansible.builtin.template', 'loki-values.yaml.j2') | from_yaml }}"
+
+- name: Fluentd manifests
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig {{ kubeconfig }} apply -f -
+    stdin: "{{ lookup('ansible.builtin.template', 'fluentd.yaml.j2') }}"
+  register: logging_apply
+  changed_when: logging_apply.stdout is search('created|configured')
+
+- name: Wait for Fluentd
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ kubeconfig }} -n logging rollout status daemonset/fluentd --timeout=180s
+  changed_when: false

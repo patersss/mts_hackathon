@@ -163,6 +163,33 @@ prometheus_auth() {
     gw_host prometheus /-/ready -f -o /dev/null -u "admin:$(admin_password)"
 }
 
+loki_query() {
+  local ip
+  ip=$(kubectl -n logging get svc loki -o jsonpath='{.spec.clusterIP}')
+  curl -fsS --max-time 10 --get --data-urlencode "query=$1" --data-urlencode since=15m \
+    "http://${ip}:3100/loki/api/v1/query_range" | jq -r '.data.result[].values[][1]'
+}
+
+loki_ready() {
+  kubectl -n logging rollout status statefulset/loki --timeout=180s &&
+    kubectl -n logging rollout status daemonset/fluentd --timeout=120s
+}
+
+# запрос с уникальным path через Gateway должен найтись в Loki LogQL-запросом
+app_log_in_loki() {
+  local uri="/loki-$$-${RANDOM}" deadline=$((SECONDS + 120))
+  gw_curl -fo /dev/null "http://$(gateway_ip)${uri}" || return 1
+  until loki_query "{namespace=\"${APP_NS}\", container=\"nginx\"} |= \"${uri}\" | json | status=\"200\"" |
+    grep -qF "\"uri\":\"${uri}\""; do
+    [[ ${SECONDS} -lt ${deadline} ]] || return 1
+    sleep 5
+  done
+}
+
+grafana_loki_datasource() {
+  gw_host grafana /api/datasources/uid/loki/health -f -u "admin:$(admin_password)" | grep -q '"status":"OK"'
+}
+
 check "node Ready" kubectl wait node --all --for=condition=Ready --timeout=120s
 check "no DiskPressure" kubectl wait node --all --for=condition=DiskPressure=false --timeout=10s
 check "no MemoryPressure" kubectl wait node --all --for=condition=MemoryPressure=false --timeout=10s
@@ -185,5 +212,8 @@ check "Prometheus query nginx_http_requests_total" app_requests_metric
 check "Prometheus target envoy up" envoy_target_up
 check "Grafana dashboard via Gateway" grafana_dashboard
 check "Prometheus via Gateway with basic auth" prometheus_auth
+check "Loki and Fluentd ready" loki_ready
+check "app request found in Loki (LogQL)" app_log_in_loki
+check "Grafana Loki datasource" grafana_loki_datasource
 
 exit "${failed}"

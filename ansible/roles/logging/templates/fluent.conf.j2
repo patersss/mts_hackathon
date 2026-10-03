@@ -1,0 +1,55 @@
+<system>
+  log_level info
+</system>
+
+<source>
+  @type tail
+  path /var/log/containers/*_{{ app_namespace }}_*.log
+  pos_file /var/lib/fluentd/containers.pos
+  path_key path
+  tag kube
+  read_from_head true
+  follow_inodes true
+  refresh_interval 5
+  <parse>
+    @type regexp
+    expression /^(?<logtime>\S+) (?<stream>stdout|stderr) [FP] (?<log>.*)$/
+  </parse>
+</source>
+
+# имя файла: <pod>_<namespace>_<container>-<container id>.log
+<filter kube>
+  @type record_transformer
+  enable_ruby true
+  renew_record true
+  <record>
+    log ${record["log"]}
+    stream ${record["stream"]}
+    pod ${File.basename(record["path"], ".log").split("_")[0]}
+    namespace ${File.basename(record["path"], ".log").split("_")[1]}
+    container ${File.basename(record["path"], ".log").split("_")[2].rpartition("-")[0]}
+    workload ${File.basename(record["path"], ".log").split("_")[0].split("-")[0..-3].join("-")}
+  </record>
+</filter>
+
+<match kube>
+  @type loki
+  url http://loki.logging.svc:3100
+  extra_labels {"job":"fluentd"}
+  remove_keys stream,pod,namespace,container,workload
+  drop_single_key true
+  line_format key_value
+  <label>
+    stream
+    pod
+    namespace
+    container
+    workload
+  </label>
+  <buffer>
+    @type file
+    path /var/lib/fluentd/buffer
+    flush_interval 2s
+    retry_max_interval 30s
+  </buffer>
+</match>

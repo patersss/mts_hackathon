@@ -24,6 +24,12 @@ grafana:
   grafana.ini:
     server:
       root_url: https://{{ grafana_host }}
+  additionalDataSources:
+    - name: Loki
+      uid: loki
+      type: loki
+      access: proxy
+      url: http://loki.logging.svc:3100
   sidecar:
     dashboards:
       searchNamespace: ALL
