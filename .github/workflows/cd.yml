@@ -1,0 +1,53 @@
+name: cd
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: [.github/workflows/cd.yml, ansible/vps-user.yml]
+  workflow_dispatch:
+
+concurrency:
+  group: cd-vps
+  cancel-in-progress: false
+
+env:
+  VPS_HOST: ${{ secrets.VPS_HOST }}
+  VPS_USER: deploy
+
+jobs:
+  vps:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: SSH key
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          [[ -n "${VPS_HOST}" && -n "${VPS_SSH_KEY}" ]] || { echo "Нет секретов VPS_HOST/VPS_SSH_KEY" >&2; exit 1; }
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${VPS_SSH_KEY}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -T 10 "${VPS_HOST}" >> ~/.ssh/known_hosts
+      - name: Create sudo user
+        run: |
+          pip install ansible-core==2.21.4
+          ansible-playbook -i "${VPS_HOST}," -u root ansible/vps-user.yml
+      - name: Upload repo
+        run: |
+          tar czf - --exclude=.git . |
+            ssh "${VPS_USER}@${VPS_HOST}" 'mkdir -p mts_hackathon && tar xzf - -C mts_hackathon'
+      - name: Deploy
+        timeout-minutes: 35
+        run: ssh "${VPS_USER}@${VPS_HOST}" 'cd mts_hackathon && make deploy'
+      - name: Verify
+        run: ssh "${VPS_USER}@${VPS_HOST}" 'cd mts_hackathon && make verify'
+      - name: Check from outside
+        run: |
+          curl -fsS --retry 5 --retry-all-errors --max-time 10 "http://${VPS_HOST}/" | grep -qx 'Hello World!'
+          curl -kfsS --retry 5 --retry-all-errors --max-time 10 "https://${VPS_HOST}/" | grep -qx 'Hello World!'
+      - name: Dump cluster state
+        if: failure()
+        run: |
+          ssh "${VPS_USER}@${VPS_HOST}" 'kubectl get nodes -o wide; kubectl get pods -A -o wide; kubectl get events -A --sort-by=.lastTimestamp | tail -60; free -h; df -h /' || true
