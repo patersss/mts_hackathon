@@ -212,3 +212,39 @@ spec:
           labels: {severity: warning}
           annotations:
             summary: Ответы 5xx от hello через Gateway
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ app_namespace }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hello
+  namespace: {{ app_namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: hello
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+        # kubelet probes
+        - ipBlock:
+            cidr: {{ node_ip }}/32
+      ports:
+        - port: http
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: metrics

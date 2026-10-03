@@ -149,20 +149,24 @@ make verify
 
 ### Автоматически
 
-`make verify` выполняет 25 проверок и завершается с ненулевым кодом, если хоть одна упала:
+`make verify` выполняет 28 проверок и завершается с ненулевым кодом, если хоть одна упала:
 нода `Ready` без DiskPressure и MemoryPressure, все поды `Running`, адреса подов из pod CIDR,
 DNS внутри кластера, StorageClass по умолчанию, приложение отвечает `Hello World!` и пишет
 запрос в access-лог, Gateway `Programmed` и получил IP ноды, HTTPRoute `Accepted`, HTTP и
 HTTPS через Gateway отдают `Hello World!`, работают маршруты `/v1` и `/v2` и сплит v1/v2,
 Prometheus видит target'ы приложения и Envoy в состоянии `up`, запрос
 `nginx_http_requests_total` возвращает данные, Grafana и Prometheus открываются через Gateway,
-запрос к приложению через Gateway находится в Loki LogQL-запросом, в Grafana подключён Loki.
+запрос к приложению через Gateway находится в Loki LogQL-запросом, в Grafana подключён Loki,
+NetworkPolicy созданы, а под из namespace `default` не достаёт до приложения и Loki напрямую.
 
 ```text
 OK   node Ready
 ...
 OK   app request found in Loki (LogQL)
 OK   Grafana Loki datasource
+OK   NetworkPolicy in demo and logging
+OK   NetworkPolicy: default -> app blocked
+OK   NetworkPolicy: default -> Loki blocked
 ```
 
 ### Вручную
@@ -183,15 +187,19 @@ P=$(kubectl -n monitoring get svc kps-prometheus -o jsonpath='{.spec.clusterIP}'
 curl -s "http://$P:9090/api/v1/query" --data-urlencode 'query=up{job="demo/hello"}' | jq .data.result
 curl -s "http://$P:9090/api/v1/query" --data-urlencode 'query=sum by (version) (nginx_http_requests_total)' | jq .data.result
 
-# логи: запрос через Gateway и поиск его в Loki
+# Grafana в браузере: https://grafana.$D/ (сертификат самоподписанный), логин admin
+PW=$(kubectl -n monitoring get secret monitoring-admin -o jsonpath='{.data.admin-password}' | base64 -d); echo $PW
+
+# логи: запрос через Gateway и поиск его в Loki (через Grafana, напрямую Loki закрыт NetworkPolicy)
 curl -s http://$IP/check-$$ >/dev/null; sleep 10
-L=$(kubectl -n logging get svc loki -o jsonpath='{.spec.clusterIP}')
-curl -sG "http://$L:3100/loki/api/v1/query_range" --data-urlencode since=5m \
+curl -skG -u admin:$PW --resolve grafana.$D:443:$IP \
+  "https://grafana.$D/api/datasources/proxy/uid/loki/loki/api/v1/query_range" --data-urlencode since=5m \
   --data-urlencode "query={namespace=\"demo\", container=\"nginx\"} |= \"/check-$$\"" |
   jq -r '.data.result[].values[][1]'
 
-# Grafana в браузере: https://grafana.$D/ (сертификат самоподписанный), логин admin
-kubectl -n monitoring get secret monitoring-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo
+# NetworkPolicy: из чужого namespace приложение недоступно (wget завершится по таймауту)
+kubectl get networkpolicy -A
+kubectl run np-test --rm -i --restart=Never --image=busybox:1.37.0 -- wget -qO- -T 5 http://hello.demo/
 ```
 
 ## Приложение
@@ -403,7 +411,7 @@ Gateway API:
 Автоматизация и CI/CD:
 
 - деплой одной командой, только Ansible и Helm, все версии закреплены;
-- 25 smoke-тестов в `make verify`;
+- 28 smoke-тестов в `make verify`;
 - CI: линтеры, gitleaks, e2e с двойным деплоем на чистой Ubuntu 24.04;
 - CD на VPS от непривилегированного пользователя с sudo.
 
@@ -417,6 +425,10 @@ PVC для Prometheus и Loki, буфер Fluentd на диске.
   повторном не меняются. gitleaks в CI ищет секреты на каждом push и PR.
 - Namespace `demo` с Pod Security `restricted`: поды не от root, `readOnlyRootFilesystem`,
   `drop: [ALL]`, `seccompProfile: RuntimeDefault`, без токена ServiceAccount.
+- NetworkPolicy (Calico): в `demo` всё входящее и исходящее запрещено по умолчанию; к nginx
+  :8080 пускают только Envoy из `envoy-gateway-system`, к экспортеру :9113 только `monitoring`.
+  Loki :3100 принимает только `logging` (Fluentd) и `monitoring` (Grafana, Prometheus). IP ноды
+  разрешён на эти порты ради проб kubelet.
 - Prometheus наружу только по HTTPS и с basic auth; Grafana только по HTTPS с логином.
 - Пакеты Kubernetes зафиксированы через `apt-mark hold`, чтобы `apt upgrade` не обновил их
   случайно.
@@ -439,7 +451,8 @@ PVC для Prometheus и Loki, буфер Fluentd на диске.
   Для Loki срок хранения не задан, место ограничено PVC 5 ГБ.
 - Alertmanager выключен: алерты видны в Prometheus, но никуда не отправляются.
 - Fluentd собирает логи только namespace `demo`.
-- NetworkPolicy не настроены.
+- NetworkPolicy закрывают только `demo` и Loki; остальные namespace (системные, мониторинг)
+  без ограничений.
 
 ## Структура репозитория
 
