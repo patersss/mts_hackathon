@@ -8,7 +8,7 @@
     create_namespace: true
     kubeconfig: "{{ kubeconfig }}"
     wait: true
-    wait_timeout: 5m
+    timeout: 5m
     values:
       frrk8s:
         enabled: false
@@ -36,7 +36,7 @@
     create_namespace: true
     kubeconfig: "{{ kubeconfig }}"
     wait: true
-    wait_timeout: 5m
+    timeout: 5m
 
 - name: Gateway
   ansible.builtin.command:
