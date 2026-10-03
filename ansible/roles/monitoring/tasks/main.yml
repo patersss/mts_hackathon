@@ -12,7 +12,7 @@
     --from-literal=admin-password={{ lookup('ansible.builtin.password', '/dev/null', chars=['ascii_letters', 'digits'], length=24) }}
   register: monitoring_secret
   changed_when: monitoring_secret.rc == 0
-  failed_when: monitoring_secret.rc != 0 and 'AlreadyExists' not in monitoring_secret.stderr
+  failed_when: monitoring_secret.rc != 0 and 'already exists' not in monitoring_secret.stderr
   no_log: true
 
 - name: Prometheus stack
