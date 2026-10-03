@@ -9,13 +9,6 @@
     repo: "deb [signed-by=/etc/apt/keyrings/kubernetes.asc] https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor }}/deb/ /"
     filename: kubernetes
 
-- name: Unhold Kubernetes packages
-  ansible.builtin.dpkg_selections:
-    name: "{{ item }}"
-    selection: install
-  loop: [kubelet, kubeadm, kubectl]
-  changed_when: false
-
 - name: Install Kubernetes packages
   ansible.builtin.apt:
     name:
@@ -23,6 +16,7 @@
       - "kubeadm={{ k8s_version }}-*"
       - "kubectl={{ k8s_version }}-*"
     allow_downgrade: true
+    allow_change_held_packages: true
 
 - name: Hold Kubernetes packages
   ansible.builtin.dpkg_selections:
