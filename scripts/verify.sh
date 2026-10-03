@@ -41,8 +41,9 @@ default_storageclass() {
     grep -q .
 }
 
+# с ноды в под не ходим: NetworkPolicy пускает в demo только Gateway и Prometheus
 app_url() {
-  echo "http://$(kubectl -n "${APP_NS}" get svc hello -o jsonpath='{.spec.clusterIP}')$1"
+  echo "http://$(gateway_ip)$1"
 }
 
 app_hello() {
@@ -163,11 +164,11 @@ prometheus_auth() {
     gw_host prometheus /-/ready -f -o /dev/null -u "admin:$(admin_password)"
 }
 
+# через datasource proxy Grafana: в Loki пускают только logging и monitoring
 loki_query() {
-  local ip
-  ip=$(kubectl -n logging get svc loki -o jsonpath='{.spec.clusterIP}')
-  curl -fsS --max-time 10 --get --data-urlencode "query=$1" --data-urlencode since=15m \
-    "http://${ip}:3100/loki/api/v1/query_range" | jq -r '.data.result[].values[][1]'
+  gw_host grafana /api/datasources/proxy/uid/loki/loki/api/v1/query_range -f --max-time 10 \
+    -u "admin:$(admin_password)" --get --data-urlencode "query=$1" --data-urlencode since=15m |
+    jq -r '.data.result[].values[][1]'
 }
 
 loki_ready() {
@@ -188,6 +189,18 @@ app_log_in_loki() {
 
 grafana_loki_datasource() {
   gw_host grafana /api/datasources/uid/loki/health -f -u "admin:$(admin_password)" | grep -q '"status":"OK"'
+}
+
+networkpolicies() {
+  kubectl -n "${APP_NS}" get networkpolicy default-deny hello &&
+    kubectl -n logging get networkpolicy loki
+}
+
+# под из default: Gateway отвечает, а $1 недоступен
+blocked_from_default() {
+  kubectl run "verify-np-$$-${RANDOM}" --rm -i --restart=Never --timeout=120s \
+    --image=busybox:1.37.0 --command -- sh -c \
+    "wget -qO- -T 5 http://$(gateway_ip)/ | grep -q Hello && ! wget -qO- -T 5 $1"
 }
 
 check "node Ready" kubectl wait node --all --for=condition=Ready --timeout=120s
@@ -215,5 +228,8 @@ check "Prometheus via Gateway with basic auth" prometheus_auth
 check "Loki and Fluentd ready" loki_ready
 check "app request found in Loki (LogQL)" app_log_in_loki
 check "Grafana Loki datasource" grafana_loki_datasource
+check "NetworkPolicy in demo and logging" networkpolicies
+check "NetworkPolicy: default -> app blocked" blocked_from_default "http://hello.${APP_NS}.svc.cluster.local/"
+check "NetworkPolicy: default -> Loki blocked" blocked_from_default http://loki.logging.svc.cluster.local:3100/ready
 
 exit "${failed}"
