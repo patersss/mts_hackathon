@@ -15,7 +15,7 @@
   failed_when: monitoring_secret.rc != 0 and 'AlreadyExists' not in monitoring_secret.stderr
   no_log: true
 
-- name: kube-prometheus-stack
+- name: Prometheus stack
   kubernetes.core.helm:
     name: kps
     chart_ref: kube-prometheus-stack
