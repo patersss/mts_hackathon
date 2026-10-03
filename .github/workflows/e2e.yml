@@ -50,7 +50,7 @@ jobs:
           kubectl -n demo describe pods || true
           kubectl -n monitoring get pods,pvc,svc -o wide || true
           kubectl -n monitoring describe pods || true
-          kubectl get podmonitor,servicemonitor,httproute,securitypolicy -A || true
+          kubectl get podmonitor,servicemonitor,httproute,securitypolicy,backendtrafficpolicy -A -o yaml || true
           kubectl -n monitoring logs --tail=50 -l app.kubernetes.io/name=prometheus-operator || true
           kubectl -n demo logs --tail=50 -l app=hello || true
           kubectl -n logging get pods,pvc,svc -o wide || true
