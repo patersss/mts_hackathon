@@ -166,17 +166,57 @@ spec:
     - name: public
       namespace: gateway
   rules:
-    - matches:
+{% set common %}
+      timeouts: {request: 10s, backendRequest: 5s}
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - {name: X-Served-By, value: envoy-gateway}
+              # Envoy подставляет id, который сам сгенерировал для запроса
+              - {name: X-Request-ID, value: "%REQ(X-REQUEST-ID)%"}
+{% endset %}
+    - name: v1
+      matches:
         - path: {type: PathPrefix, value: /v1}
       backendRefs:
         - {name: hello-v1, port: 80}
-    - matches:
+{{ common }}
+    - name: v2
+      matches:
         - path: {type: PathPrefix, value: /v2}
       backendRefs:
         - {name: hello-v2, port: 80}
-    - backendRefs:
+{{ common }}
+    - name: by-header
+      matches:
+        - headers:
+            - {name: X-Version, value: v2}
+      backendRefs:
+        - {name: hello-v2, port: 80}
+{{ common }}
+    - name: split
+      backendRefs:
         - {name: hello-v1, port: 80, weight: 80}
         - {name: hello-v2, port: 80, weight: 20}
+{{ common }}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: hello-v2-ratelimit
+  namespace: {{ app_namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: hello
+      sectionName: v2
+  rateLimit:
+    type: Local
+    local:
+      rules:
+        - limit: {requests: 10, unit: Second}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor

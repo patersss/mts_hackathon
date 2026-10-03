@@ -108,6 +108,46 @@ gateway_split() {
   [[ "${seen}" == "v1 v2 " ]]
 }
 
+# все правила маршрута с таймаутами, rate limit привязан к правилу v2
+route_extras_accepted() {
+  [[ "$(kubectl -n "${APP_NS}" get httproute hello -o jsonpath='{.spec.rules[*].timeouts.request}')" == "10s 10s 10s 10s" ]] &&
+    kubectl -n "${APP_NS}" wait backendtrafficpolicy/hello-v2-ratelimit --timeout=60s \
+      --for=jsonpath='{.status.ancestors[0].conditions[?(@.type=="Accepted")].status}'=True
+}
+
+gateway_header_route() {
+  local ip
+  ip=$(gateway_ip)
+  for _ in $(seq 10); do
+    gw_curl -o /dev/null -D - -H 'X-Version: v2' "http://${ip}/" | grep -qi '^x-app-version: v2' || return 1
+  done
+}
+
+gateway_response_headers() {
+  local h
+  h=$(gw_curl -o /dev/null -D - "http://$(gateway_ip)/")
+  grep -qi '^x-served-by: envoy-gateway' <<<"${h}" && grep -Eqi '^x-request-id: [0-9a-f-]{36}' <<<"${h}"
+}
+
+# коды 30 запросов подряд; без --retry, curl повторяет 429
+burst() {
+  local ip
+  ip=$(gateway_ip)
+  for _ in $(seq 30); do curl -s -o /dev/null -w '%{http_code}\n' --max-time 5 "http://${ip}$1"; done
+}
+
+ratelimit_v2() {
+  burst /v2 | grep -qx 429
+}
+
+no_ratelimit_elsewhere() {
+  [[ "$(burst /v1 | sort -u)" == 200 && "$(burst / | sort -u)" == 200 ]]
+}
+
+ratelimit_metric() {
+  prom_expect 'sum({__name__=~"envoy_.*local_rate_limit_rate_limited"}) > bool 0' 1
+}
+
 prom_query() {
   local ip
   ip=$(kubectl -n monitoring get svc kps-prometheus -o jsonpath='{.spec.clusterIP}')
@@ -219,10 +259,16 @@ check "Gateway HTTP :80 Hello World" gateway_http
 check "Gateway HTTPS :443 Hello World" gateway_https
 check "Gateway path routing /v1 /v2" gateway_path
 check "Gateway traffic split v1/v2" gateway_split
+check "HTTPRoute timeouts, rate limit policy Accepted" route_extras_accepted
+check "Gateway header X-Version: v2 -> v2" gateway_header_route
+check "Gateway response headers X-Served-By, X-Request-ID" gateway_response_headers
+check "Gateway rate limit /v2 -> 429" ratelimit_v2
+check "Gateway no rate limit on / and /v1" no_ratelimit_elsewhere
 check "Prometheus ready" prometheus_ready
 check "Prometheus targets app up" app_targets_up
 check "Prometheus query nginx_http_requests_total" app_requests_metric
 check "Prometheus target envoy up" envoy_target_up
+check "Prometheus rate limit metric" ratelimit_metric
 check "Grafana dashboard via Gateway" grafana_dashboard
 check "Prometheus via Gateway with basic auth" prometheus_auth
 check "Loki and Fluentd ready" loki_ready
@@ -232,4 +278,5 @@ check "NetworkPolicy in demo and logging" networkpolicies
 check "NetworkPolicy: default -> app blocked" blocked_from_default "http://hello.${APP_NS}.svc.cluster.local/"
 check "NetworkPolicy: default -> Loki blocked" blocked_from_default http://loki.logging.svc.cluster.local:3100/ready
 
+echo "INFO MemAvailable $(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo) MB"
 exit "${failed}"
