@@ -13,16 +13,24 @@
   register: cni_installation
   changed_when: cni_installation.stdout is search('created|configured')
 
-- name: Wait for node Ready
+# оператору нужно время, чтобы создать сами объекты
+- name: Wait for Calico workloads to appear
   ansible.builtin.command: >-
-    kubectl --kubeconfig {{ kubeconfig }} wait node --all --for=condition=Ready --timeout=300s
+    kubectl --kubeconfig {{ kubeconfig }} -n calico-system get {{ item }}
+  loop: [daemonset/calico-node, deployment/calico-kube-controllers]
+  register: cni_objects
+  retries: 30
+  delay: 5
+  until: cni_objects.rc == 0
   changed_when: false
 
-- name: Wait for Calico
+- name: Wait for Calico rollout
   ansible.builtin.command: >-
-    kubectl --kubeconfig {{ kubeconfig }} wait tigerastatus/calico --for=condition=Available --timeout=600s
-  register: cni_status
-  retries: 10
-  delay: 10
-  until: cni_status.rc == 0
+    kubectl --kubeconfig {{ kubeconfig }} -n calico-system rollout status {{ item }} --timeout=300s
+  loop: [daemonset/calico-node, deployment/calico-kube-controllers]
+  changed_when: false
+
+- name: Wait for node Ready
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ kubeconfig }} wait node --all --for=condition=Ready --timeout=120s
   changed_when: false

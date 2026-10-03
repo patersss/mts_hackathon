@@ -6,23 +6,34 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   kubeadm:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - name: Deploy
+        timeout-minutes: 25
         run: make deploy
       - name: Verify
         run: make verify
       - name: Redeploy (idempotency)
+        timeout-minutes: 15
         run: make deploy
       - name: Verify again
         run: make verify
       - name: Dump cluster state
         if: failure()
         run: |
-          kubectl get all -A -o wide || true
+          kubectl get nodes -o wide || true
+          kubectl get pods -A -o wide || true
+          kubectl get tigerastatus -o yaml || true
+          kubectl -n calico-system describe pods || true
+          kubectl -n calico-system logs --all-containers --tail=100 -l k8s-app=calico-node || true
+          kubectl -n tigera-operator logs --tail=100 deploy/tigera-operator || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -60 || true
-          sudo journalctl -u kubelet --no-pager | tail -40 || true
+          sudo journalctl -u kubelet --no-pager | tail -60 || true
