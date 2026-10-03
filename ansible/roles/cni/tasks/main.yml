@@ -1,26 +1,28 @@
-- name: Calico (tigera-operator)
-  kubernetes.core.helm:
-    name: calico
-    chart_ref: tigera-operator
-    chart_repo_url: https://docs.tigera.io/calico/charts
-    chart_version: "v{{ calico_version }}"
-    release_namespace: tigera-operator
-    create_namespace: true
-    kubeconfig: "{{ kubeconfig }}"
-    wait: true
-    values:
-      installation:
-        cni:
-          type: Calico
-        calicoNetwork:
-          bgp: Disabled
-          ipPools:
-            - cidr: "{{ pod_cidr }}"
-              encapsulation: VXLAN
-              natOutgoing: Enabled
-              nodeSelector: all()
+- name: Calico operator
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ kubeconfig }} apply --server-side --force-conflicts
+    -f https://raw.githubusercontent.com/projectcalico/calico/v{{ calico_version }}/manifests/{{ item }}
+  loop: [operator-crds.yaml, tigera-operator.yaml]
+  register: cni_operator
+  changed_when: cni_operator.stdout is search('serverside-applied')
+
+- name: Calico installation
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig {{ kubeconfig }} apply -f -
+    stdin: "{{ lookup('ansible.builtin.template', 'installation.yaml.j2') }}"
+  register: cni_installation
+  changed_when: cni_installation.stdout is search('created|configured')
 
 - name: Wait for node Ready
   ansible.builtin.command: >-
     kubectl --kubeconfig {{ kubeconfig }} wait node --all --for=condition=Ready --timeout=300s
+  changed_when: false
+
+- name: Wait for Calico
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ kubeconfig }} wait tigerastatus/calico --for=condition=Available --timeout=600s
+  register: cni_status
+  retries: 10
+  delay: 10
+  until: cni_status.rc == 0
   changed_when: false

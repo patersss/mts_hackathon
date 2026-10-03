@@ -35,6 +35,19 @@
     dest: /etc/kubernetes/kubeadm.yaml
     mode: "0600"
 
+- name: Find foreign CNI configs
+  ansible.builtin.find:
+    paths: /etc/cni/net.d
+    excludes: ["*calico*"]
+  register: kubernetes_cni_confs
+
+# Посторонний bridge CNI (например от podman) перехватывает поды до установки Calico
+- name: Remove foreign CNI configs
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ kubernetes_cni_confs.files }}"
+
 - name: Init cluster
   ansible.builtin.command: kubeadm init --config /etc/kubernetes/kubeadm.yaml
   args:
