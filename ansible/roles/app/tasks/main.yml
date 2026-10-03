@@ -1,0 +1,12 @@
+- name: App manifests
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig {{ kubeconfig }} apply -f -
+    stdin: "{{ lookup('ansible.builtin.template', 'hello.yaml.j2') }}"
+  register: app_apply
+  changed_when: app_apply.stdout is search('created|configured')
+
+- name: Wait for app rollout
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ kubeconfig }} -n {{ app_namespace }}
+    rollout status deployment/hello --timeout=180s
+  changed_when: false

@@ -2,6 +2,7 @@
 set -uo pipefail
 
 POD_CIDR_PREFIX=${POD_CIDR_PREFIX:-10.244.}
+APP_NS=${APP_NS:-demo}
 
 failed=0
 check() {
@@ -40,6 +41,25 @@ default_storageclass() {
     grep -q .
 }
 
+app_url() {
+  echo "http://$(kubectl -n "${APP_NS}" get svc hello -o jsonpath='{.spec.clusterIP}')$1"
+}
+
+app_hello() {
+  kubectl -n "${APP_NS}" rollout status deployment/hello --timeout=120s &&
+    curl -fsS --retry 5 --retry-all-errors --max-time 5 "$(app_url /)" | grep -qx 'Hello World!'
+}
+
+app_access_log() {
+  local uri="/verify-$$-${RANDOM}" deadline=$((SECONDS + 30))
+  curl -fsS --max-time 5 "$(app_url "${uri}")" >/dev/null || return 1
+  until kubectl -n "${APP_NS}" logs -l app=hello --tail=100 |
+    grep -F "\"uri\":\"${uri}\"" | grep -q '"status":200'; do
+    [[ ${SECONDS} -lt ${deadline} ]] || return 1
+    sleep 2
+  done
+}
+
 check "node Ready" kubectl wait node --all --for=condition=Ready --timeout=120s
 check "no DiskPressure" kubectl wait node --all --for=condition=DiskPressure=false --timeout=10s
 check "no MemoryPressure" kubectl wait node --all --for=condition=MemoryPressure=false --timeout=10s
@@ -47,5 +67,7 @@ check "pods Running" pods_running
 check "pod IP from pod CIDR" pods_in_pod_cidr
 check "cluster DNS" cluster_dns
 check "default StorageClass" default_storageclass
+check "app answers Hello World" app_hello
+check "app access log" app_access_log
 
 exit "${failed}"

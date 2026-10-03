@@ -22,7 +22,8 @@ make verify
 `kubeadm init` пропускается, манифесты применяются через `kubectl apply`.
 
 `make verify` — smoke-тесты: нода `Ready`, все поды в рабочем состоянии, адреса подов из
-pod CIDR, работает DNS внутри кластера, есть StorageClass по умолчанию.
+pod CIDR, работает DNS внутри кластера, есть StorageClass по умолчанию, приложение отвечает
+`Hello World!` и пишет запрос в access-лог.
 
 После деплоя kubeconfig лежит в `~/.kube/config` у пользователя, запускавшего `make deploy`.
 
@@ -36,10 +37,34 @@ pod CIDR, работает DNS внутри кластера, есть StorageCl
 | local-path-provisioner (default SC) | 0.0.37 | `storage` |
 | Helm | 3.22.0 | `kubernetes` |
 
+| nginx (`nginxinc/nginx-unprivileged`) | 1.30.5-alpine | `app` |
+
 Подготовка узла (swap, модули ядра, sysctl, пакеты) — роль `prereqs`.
 Все версии закреплены в `ansible/group_vars/all.yml`.
 
 С control-plane снят taint, поэтому нагрузка планируется на единственную ноду.
+
+## Приложение
+
+nginx в namespace `demo`: Deployment `hello` (2 реплики) и Service `hello` (порт 80).
+Конфиг из ConfigMap, контейнер не от root, файловая система только для чтения.
+На любой путь отвечает `Hello World!`, `/healthz` используется пробами.
+
+Access-лог пишется в stdout в JSON, по строке на запрос; error-лог в stderr.
+Kubernetes сохраняет их в `/var/log/containers/`, откуда их заберёт сборщик логов.
+
+Проверка с ноды:
+
+```bash
+curl http://$(kubectl -n demo get svc hello -o jsonpath='{.spec.clusterIP}')/
+kubectl -n demo logs -l app=hello --tail=5
+```
+
+Пример строки лога:
+
+```json
+{"time":"2026-10-03T18:00:00+00:00","remote_addr":"10.244.0.1","x_forwarded_for":"","host":"10.96.12.34","method":"GET","uri":"/","status":200,"bytes":13,"request_time":0.000,"user_agent":"curl/8.5.0"}
+```
 
 ## Команды
 
