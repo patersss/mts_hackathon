@@ -243,17 +243,6 @@ blocked_from_default() {
     "wget -qO- -T 5 http://$(gateway_ip)/ | grep -q Hello && ! wget -qO- -T 5 $1"
 }
 
-# память подов по cgroup (anon, без page cache), МБ
-mem_report() {
-  local pods d uid
-  pods=$(kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.uid} {.metadata.namespace}/{.metadata.name}{"\n"}{end}')
-  find /sys/fs/cgroup/kubepods.slice -maxdepth 2 -name 'kubepods-*pod*.slice' | while read -r d; do
-    uid=${d##*pod}; uid=${uid%.slice}; uid=${uid//_/-}
-    echo "INFO $(awk '/^anon /{print int($2/1048576)}' "${d}/memory.stat") MB $(awk -v u="${uid}" '$1==u{print $2}' <<<"${pods}")"
-  done | sort -k2 -rn
-  echo "INFO system.slice $(awk '/^anon /{print int($2/1048576)}' /sys/fs/cgroup/system.slice/memory.stat) MB"
-}
-
 check "node Ready" kubectl wait node --all --for=condition=Ready --timeout=120s
 check "no DiskPressure" kubectl wait node --all --for=condition=DiskPressure=false --timeout=10s
 check "no MemoryPressure" kubectl wait node --all --for=condition=MemoryPressure=false --timeout=10s
@@ -289,6 +278,5 @@ check "NetworkPolicy in demo and logging" networkpolicies
 check "NetworkPolicy: default -> app blocked" blocked_from_default "http://hello.${APP_NS}.svc.cluster.local/"
 check "NetworkPolicy: default -> Loki blocked" blocked_from_default http://loki.logging.svc.cluster.local:3100/ready
 
-echo "INFO MemAvailable $(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo) MB"
-mem_report
+"$(dirname "$0")/mem-report.sh"
 exit "${failed}"

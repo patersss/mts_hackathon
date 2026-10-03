@@ -38,6 +38,8 @@ jobs:
         run: |
           tar czf - --exclude=.git . |
             ssh "${VPS_USER}@${VPS_HOST}" 'mkdir -p mts_hackathon && tar xzf - -C mts_hackathon'
+      - name: Memory before deploy
+        run: ssh "${VPS_USER}@${VPS_HOST}" 'cd mts_hackathon && ./scripts/mem-report.sh' || true
       - name: Deploy
         timeout-minutes: 35
         run: ssh "${VPS_USER}@${VPS_HOST}" 'cd mts_hackathon && ./deploy.sh'
@@ -50,4 +52,4 @@ jobs:
       - name: Dump cluster state
         if: failure()
         run: |
-          ssh "${VPS_USER}@${VPS_HOST}" 'kubectl get nodes -o wide; kubectl get pods -A -o wide; kubectl get events -A --sort-by=.lastTimestamp | tail -60; free -h; df -h /' || true
+          ssh "${VPS_USER}@${VPS_HOST}" 'kubectl get nodes -o wide; kubectl get pods -A -o wide; kubectl get events -A --sort-by=.lastTimestamp | tail -60; free -h; df -h /; cd mts_hackathon && ./scripts/mem-report.sh' || true
