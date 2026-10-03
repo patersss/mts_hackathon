@@ -53,6 +53,33 @@
   args:
     creates: /etc/kubernetes/admin.conf
 
+# на уже поднятом кластере init пропускается, манифест apiserver обновляем отдельно
+- name: Kube-apiserver manifest
+  ansible.builtin.shell: |
+    set -o pipefail
+    before=$(sha256sum /etc/kubernetes/manifests/kube-apiserver.yaml)
+    kubeadm init phase control-plane apiserver --config /etc/kubernetes/kubeadm.yaml >/dev/null
+    [ "$before" = "$(sha256sum /etc/kubernetes/manifests/kube-apiserver.yaml)" ] || echo changed
+  args:
+    executable: /bin/bash
+  register: kubernetes_apiserver
+  changed_when: kubernetes_apiserver.stdout == 'changed'
+
+# kubelet замечает новый манифест не сразу
+- name: Let kubelet restart apiserver
+  ansible.builtin.pause:
+    seconds: 40
+  when: kubernetes_apiserver.stdout == 'changed'
+
+- name: Wait for apiserver
+  ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf get --raw /readyz
+  register: kubernetes_readyz
+  retries: 24
+  delay: 5
+  until: kubernetes_readyz.rc == 0
+  changed_when: false
+  when: kubernetes_apiserver.stdout == 'changed'
+
 - name: Kubeconfig dir for {{ deploy_user }}
   ansible.builtin.file:
     path: "{{ kubeconfig | dirname }}"

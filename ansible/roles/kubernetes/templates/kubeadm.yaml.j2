@@ -14,6 +14,10 @@ networking:
   serviceSubnet: {{ service_cidr }}
 apiServer:
   certSANs: [{{ node_ip }}]
+  # мягкий лимит: без него Go не торопится отдавать память, на 4 ГБ это заметно
+  extraEnvs:
+    - name: GOMEMLIMIT
+      value: 700MiB
 controllerManager:
   extraArgs:
     - name: bind-address

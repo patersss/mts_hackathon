@@ -53,12 +53,35 @@ grafana:
   grafana.ini:
     server:
       root_url: https://{{ grafana_host }}
-  additionalDataSources:
-    - name: Loki
-      uid: loki
-      type: loki
-      access: proxy
-      url: http://loki.logging.svc:3100
+  defaultDashboardsEnabled: false
+  # без сайдкаров: datasource и дашборд монтируются файлами, экономит два python-процесса
   sidecar:
     dashboards:
-      searchNamespace: ALL
+      enabled: false
+    datasources:
+      enabled: false
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          uid: prometheus
+          type: prometheus
+          access: proxy
+          url: http://kps-prometheus.monitoring.svc:9090
+          isDefault: true
+        - name: Loki
+          uid: loki
+          type: loki
+          access: proxy
+          url: http://loki.logging.svc:3100
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: default
+          type: file
+          options:
+            path: /var/lib/grafana/dashboards/default
+  dashboardsConfigMaps:
+    default: dashboard-hello
