@@ -4,11 +4,12 @@ metadata:
   name: {{ app_namespace }}
   labels:
     pod-security.kubernetes.io/enforce: restricted
+{% for version in ['v1', 'v2'] %}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: hello
+  name: hello-{{ version }}
   namespace: {{ app_namespace }}
 data:
   nginx.conf: |
@@ -26,13 +27,14 @@ data:
       log_format json escape=json '{"time":"$time_iso8601","remote_addr":"$remote_addr",'
         '"x_forwarded_for":"$http_x_forwarded_for","host":"$host","method":"$request_method",'
         '"uri":"$request_uri","status":$status,"bytes":$body_bytes_sent,'
-        '"request_time":$request_time,"user_agent":"$http_user_agent"}';
+        '"request_time":$request_time,"user_agent":"$http_user_agent","version":"{{ version }}"}';
       access_log /dev/stdout json;
       error_log /dev/stderr warn;
 
       server {
         listen 8080;
         default_type text/plain;
+        add_header X-App-Version {{ version }} always;
         location / {
           return 200 "Hello World!\n";
         }
@@ -46,17 +48,19 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: hello
+  name: hello-{{ version }}
   namespace: {{ app_namespace }}
 spec:
-  replicas: 2
+  replicas: {{ 2 if version == 'v1' else 1 }}
   selector:
     matchLabels:
       app: hello
+      version: {{ version }}
   template:
     metadata:
       labels:
         app: hello
+        version: {{ version }}
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -86,9 +90,24 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: hello
+            name: hello-{{ version }}
         - name: tmp
           emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-{{ version }}
+  namespace: {{ app_namespace }}
+spec:
+  selector:
+    app: hello
+    version: {{ version }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+{% endfor %}
 ---
 apiVersion: v1
 kind: Service
@@ -113,3 +132,25 @@ spec:
   selector:
     matchLabels:
       app: hello
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: hello
+  namespace: {{ app_namespace }}
+spec:
+  parentRefs:
+    - name: public
+      namespace: gateway
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /v1}
+      backendRefs:
+        - {name: hello-v1, port: 80}
+    - matches:
+        - path: {type: PathPrefix, value: /v2}
+      backendRefs:
+        - {name: hello-v2, port: 80}
+    - backendRefs:
+        - {name: hello-v1, port: 80, weight: 80}
+        - {name: hello-v2, port: 80, weight: 20}

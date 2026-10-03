@@ -1,0 +1,84 @@
+- name: MetalLB
+  kubernetes.core.helm:
+    name: metallb
+    chart_ref: metallb
+    chart_repo_url: https://metallb.github.io/metallb
+    chart_version: "{{ metallb_version }}"
+    release_namespace: metallb-system
+    create_namespace: true
+    kubeconfig: "{{ kubeconfig }}"
+    wait: true
+    wait_timeout: 5m
+    values:
+      frrk8s:
+        enabled: false
+      speaker:
+        # kubeadm вешает на control-plane метку exclude-from-external-load-balancers
+        ignoreExcludeLB: true
+
+# webhook MetalLB начинает отвечать чуть позже готовности пода
+- name: MetalLB address pool
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig {{ kubeconfig }} apply -f -
+    stdin: "{{ lookup('ansible.builtin.template', 'metallb.yaml.j2') }}"
+  register: gateway_metallb
+  retries: 6
+  delay: 10
+  until: gateway_metallb.rc == 0
+  changed_when: gateway_metallb.stdout is search('created|configured')
+
+- name: Envoy Gateway
+  kubernetes.core.helm:
+    name: eg
+    chart_ref: oci://docker.io/envoyproxy/gateway-helm
+    chart_version: "v{{ envoy_gateway_version }}"
+    release_namespace: envoy-gateway-system
+    create_namespace: true
+    kubeconfig: "{{ kubeconfig }}"
+    wait: true
+    wait_timeout: 5m
+
+- name: Gateway
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig {{ kubeconfig }} apply -f -
+    stdin: "{{ lookup('ansible.builtin.template', 'gateway.yaml.j2') }}"
+  register: gateway_apply
+  changed_when: gateway_apply.stdout is search('created|configured')
+
+- name: TLS dir
+  ansible.builtin.file:
+    path: "{{ tls_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: Self-signed certificate
+  ansible.builtin.command: >-
+    openssl req -x509 -newkey rsa:2048 -nodes -days 825
+    -keyout {{ tls_dir }}/tls.key -out {{ tls_dir }}/tls.crt
+    -subj "/CN={{ base_domain }}"
+    -addext "subjectAltName=DNS:{{ base_domain }},DNS:*.{{ base_domain }},IP:{{ node_ip }}"
+  args:
+    creates: "{{ tls_dir }}/tls.crt"
+
+- name: Render TLS secret
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ kubeconfig }} -n gateway create secret tls gateway-tls
+    --cert {{ tls_dir }}/tls.crt --key {{ tls_dir }}/tls.key
+    --dry-run=client -o yaml
+  register: gateway_secret
+  changed_when: false
+  no_log: true
+
+- name: TLS secret
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig {{ kubeconfig }} apply -f -
+    stdin: "{{ gateway_secret.stdout }}"
+  register: gateway_secret_apply
+  changed_when: gateway_secret_apply.stdout is search('created|configured')
+  no_log: true
+
+- name: Wait for Gateway
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ kubeconfig }} -n gateway
+    wait gateway/public --for=condition=Programmed --timeout=300s
+  changed_when: false

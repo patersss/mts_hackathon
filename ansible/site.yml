@@ -6,4 +6,5 @@
     - kubernetes
     - cni
     - storage
+    - gateway
     - app
