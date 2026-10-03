@@ -1,0 +1,8 @@
+- name: Kubernetes node
+  hosts: k8s
+  roles:
+    - prereqs
+    - containerd
+    - kubernetes
+    - cni
+    - storage

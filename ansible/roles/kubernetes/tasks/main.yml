@@ -1,0 +1,72 @@
+- name: Kubernetes apt key
+  ansible.builtin.get_url:
+    url: "https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor }}/deb/Release.key"
+    dest: /etc/apt/keyrings/kubernetes.asc
+    mode: "0644"
+
+- name: Kubernetes apt repo
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/kubernetes.asc] https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor }}/deb/ /"
+    filename: kubernetes
+
+- name: Unhold Kubernetes packages
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: install
+  loop: [kubelet, kubeadm, kubectl]
+  changed_when: false
+
+- name: Install Kubernetes packages
+  ansible.builtin.apt:
+    name:
+      - "kubelet={{ k8s_version }}-*"
+      - "kubeadm={{ k8s_version }}-*"
+      - "kubectl={{ k8s_version }}-*"
+    allow_downgrade: true
+
+- name: Hold Kubernetes packages
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: [kubelet, kubeadm, kubectl]
+
+- name: Enable kubelet
+  ansible.builtin.systemd_service:
+    name: kubelet
+    enabled: true
+
+- name: Kubeadm config
+  ansible.builtin.template:
+    src: kubeadm.yaml.j2
+    dest: /etc/kubernetes/kubeadm.yaml
+    mode: "0600"
+
+- name: Init cluster
+  ansible.builtin.command: kubeadm init --config /etc/kubernetes/kubeadm.yaml
+  args:
+    creates: /etc/kubernetes/admin.conf
+
+- name: Kubeconfig dir for {{ deploy_user }}
+  ansible.builtin.file:
+    path: "~{{ deploy_user }}/.kube"
+    state: directory
+    owner: "{{ deploy_user }}"
+    mode: "0700"
+  when: deploy_user != 'root'
+
+- name: Kubeconfig for {{ deploy_user }}
+  ansible.builtin.copy:
+    src: /etc/kubernetes/admin.conf
+    dest: "~{{ deploy_user }}/.kube/config"
+    remote_src: true
+    owner: "{{ deploy_user }}"
+    mode: "0600"
+  when: deploy_user != 'root'
+
+- name: Install helm
+  ansible.builtin.shell: |
+    set -o pipefail
+    curl -fsSL https://get.helm.sh/helm-v{{ helm_version }}-linux-amd64.tar.gz | tar -xz -C /usr/local/bin --strip-components=1 linux-amd64/helm
+  args:
+    executable: /bin/bash
+    creates: /usr/local/bin/helm

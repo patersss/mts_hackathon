@@ -1,0 +1,6 @@
+*.retry
+.vault*
+*.pem
+*.key
+kubeconfig*
+.venv/

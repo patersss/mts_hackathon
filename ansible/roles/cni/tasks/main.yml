@@ -1,0 +1,26 @@
+- name: Calico (tigera-operator)
+  kubernetes.core.helm:
+    name: calico
+    chart_ref: tigera-operator
+    chart_repo_url: https://docs.tigera.io/calico/charts
+    chart_version: "v{{ calico_version }}"
+    release_namespace: tigera-operator
+    create_namespace: true
+    kubeconfig: "{{ kubeconfig }}"
+    wait: true
+    values:
+      installation:
+        cni:
+          type: Calico
+        calicoNetwork:
+          bgp: Disabled
+          ipPools:
+            - cidr: "{{ pod_cidr }}"
+              encapsulation: VXLAN
+              natOutgoing: Enabled
+              nodeSelector: all()
+
+- name: Wait for node Ready
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ kubeconfig }} wait node --all --for=condition=Ready --timeout=300s
+  changed_when: false
