@@ -380,14 +380,17 @@ Loki в режиме Monolithic (один под), хранение на фай�
 sum by (workload) (count_over_time({namespace="demo", container="nginx", stream="stdout"}[5m]))
 ```
 
-Проверка с ноды: запрос с уникальным путём через Gateway, затем поиск в Loki.
+Проверка с ноды: запрос с уникальным путём через Gateway, затем поиск в Loki через Grafana
+(напрямую Loki закрыт NetworkPolicy).
 
 ```bash
 IP=$(kubectl -n gateway get gateway public -o jsonpath='{.status.addresses[0].value}')
+D=${IP//./-}.nip.io
+PW=$(kubectl -n monitoring get secret monitoring-admin -o jsonpath='{.data.admin-password}' | base64 -d)
 curl -s http://$IP/my-test-request
 sleep 10
-L=$(kubectl -n logging get svc loki -o jsonpath='{.spec.clusterIP}')
-curl -sG "http://$L:3100/loki/api/v1/query_range" --data-urlencode since=5m \
+curl -skG -u "admin:$PW" --resolve grafana.$D:443:$IP \
+  "https://grafana.$D/api/datasources/proxy/uid/loki/loki/api/v1/query_range" --data-urlencode since=5m \
   --data-urlencode 'query={namespace="demo", container="nginx"} |= "/my-test-request" | json' |
   jq -r '.data.result[].values[][1]'
 ```
