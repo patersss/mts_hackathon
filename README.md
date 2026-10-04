@@ -154,6 +154,8 @@ make verify
 DNS внутри кластера, StorageClass по умолчанию, приложение отвечает `Hello World!` и пишет
 запрос в access-лог, Gateway `Programmed` и получил IP ноды, HTTPRoute `Accepted`, HTTP и
 HTTPS через Gateway отдают `Hello World!`, работают маршруты `/v1` и `/v2` и сплит v1/v2,
+маршрут по заголовку `X-Version`, заголовки ответа `X-Served-By` и `X-Request-ID`, rate limit на `/v2`
+(есть 429) и его отсутствие на `/` и `/v1`, метрика rate limit в Prometheus,
 Prometheus видит target'ы приложения и Envoy в состоянии `up`, запрос
 `nginx_http_requests_total` возвращает данные, Grafana и Prometheus открываются через Gateway,
 запрос к приложению через Gateway находится в Loki LogQL-запросом, в том числе по `request_id`
@@ -242,12 +244,14 @@ kubectl -n demo logs -l app=hello --tail=5
 |---|---|
 | `GatewayClass eg` | контроллер `gateway.envoyproxy.io/gatewayclass-controller` |
 | `Gateway gateway/public` | listener `http` на 80 и `https` на 443 (TLS terminate, Secret `gateway-tls`), маршруты из любых namespace |
-| `HTTPRoute demo/hello` | `/v1` → `hello-v1`, `/v2` → `hello-v2`, остальное 80/20 между `hello-v1` и `hello-v2` |
+| `HTTPRoute demo/hello` | `/v1` → `hello-v1`, `/v2` → `hello-v2`, заголовок `X-Version: v2` → `hello-v2`, остальное 80/20 между `hello-v1` и `hello-v2`; во всех правилах `timeouts` (10 с на запрос, 5 с на backend) и фильтр `ResponseHeaderModifier` (`X-Served-By`, `X-Request-ID`) |
 | `HTTPRoute monitoring/grafana` | hostname `grafana.<ip>.nip.io` → Grafana, только HTTPS |
 | `HTTPRoute monitoring/prometheus` | hostname `prometheus.<ip>.nip.io` → Prometheus, только HTTPS |
 | `HTTPRoute monitoring/https-redirect` | HTTP → HTTPS (фильтр `RequestRedirect`, 301) для Grafana и Prometheus |
 
-Кроме того, используется ресурс Envoy Gateway `SecurityPolicy` для basic auth на Prometheus.
+Кроме того, используются ресурсы Envoy Gateway: `SecurityPolicy` для basic auth на Prometheus и
+`BackendTrafficPolicy` `demo/hello-v2-ratelimit` с локальным лимитом 10 запросов в секунду на правило
+`/v2` (сверх лимита ответ 429).
 
 Envoy публикуется Service типа LoadBalancer. MetalLB выдаёт ему IP самой ноды (пул из одного
 адреса), поэтому Gateway доступен на `http://<IP ноды>/` и `https://<IP ноды>/` без NodePort.
@@ -266,10 +270,15 @@ curl -k https://hello.${IP//./-}.nip.io/
 curl -sI http://$IP/v1 | grep -i x-app-version
 curl -sI http://$IP/v2 | grep -i x-app-version
 for i in $(seq 50); do curl -sI http://$IP/ | grep -i x-app-version; done | sort | uniq -c
+curl -sI -H 'X-Version: v2' http://$IP/ | grep -i x-app-version
+curl -sI http://$IP/ | grep -iE 'x-served-by|x-request-id'
+for i in $(seq 30); do curl -s -o /dev/null -w '%{http_code}\n' http://$IP/v2; done | sort | uniq -c
 curl -sI http://grafana.${IP//./-}.nip.io/ | head -3
 ```
 
-Последний цикл показывает примерно 40 ответов v1 и 10 ответов v2, последняя команда — 301 на HTTPS.
+Цикл по `/` показывает примерно 40 ответов v1 и 10 ответов v2. С заголовком `X-Version: v2` всегда
+отвечает v2. Цикл по `/v2` даёт часть ответов 429 (rate limit), на `/` и `/v1` лимита нет.
+Последняя команда — 301 на HTTPS.
 
 ## Мониторинг
 
@@ -283,10 +292,11 @@ local-path), Grafana, node-exporter, kube-state-metrics. Alertmanager выклю
 | `demo/hello` | PodMonitor, sidecar nginx-prometheus-exporter в каждом поде (`:9113`, читает `stub_status` nginx) | запросы и соединения nginx |
 | `envoy-gateway-system/envoy-proxy` | PodMonitor, Envoy (`:19001/stats/prometheus`) | запросы, коды ответов и задержки на Gateway |
 | `envoy-gateway` | ServiceMonitor контроллера Envoy Gateway | состояние контроллера |
-| `kubelet`, `node-exporter`, `kube-state-metrics`, `apiserver`, `coredns`, etcd, scheduler, controller-manager, kube-proxy | встроены в чарт | CPU/RAM подов и ноды, состояние объектов Kubernetes |
+| `kubelet` (cAdvisor), `node-exporter`, `kube-state-metrics` | встроены в чарт | CPU/RAM подов и ноды, состояние объектов Kubernetes |
 
-Чтобы target'ы etcd, scheduler, controller-manager и kube-proxy были доступны, в конфиге
-kubeadm их метрики слушают не только localhost.
+Метрики control plane (apiserver, etcd, scheduler, controller-manager, kube-proxy, CoreDNS) и
+стандартные дашборды чарта выключены: на машине с 4 ГБ RAM они занимали заметную часть памяти, а
+для задания не нужны. Prometheus хранит данные 1 день (не больше 1 ГБ), опрос раз в 30 секунд.
 
 Основные метрики приложения:
 
@@ -299,6 +309,7 @@ kubeadm их метрики слушают не только localhost.
 | `nginx_connections_accepted`, `nginx_connections_handled` | counter | принятые и обработанные соединения; разница — отброшенные |
 | `envoy_cluster_upstream_rq_xx{envoy_response_code_class}` | counter | ответы приложения через Gateway по классам кодов (2xx, 5xx) |
 | `envoy_cluster_upstream_rq_time_bucket` | histogram | время ответа приложения через Gateway, мс |
+| `{__name__=~"envoy_.*local_rate_limit_rate_limited"}` | counter | запросы, отклонённые rate limit на `/v2` |
 | `container_cpu_usage_seconds_total`, `container_memory_working_set_bytes` | counter / gauge | CPU и память контейнеров |
 
 Примеры запросов:
@@ -317,7 +328,7 @@ histogram_quantile(0.95, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket
 Доступ через Gateway (HTTP перенаправляется на HTTPS):
 
 - Grafana: `https://grafana.<ip-с-дефисами>.nip.io/`, дашборд **Hello app** (RPS по версиям,
-  коды ответов, p50/p95, CPU и память подов, логи) плюс стандартные дашборды чарта.
+  коды ответов, p50/p95, CPU и память подов, логи).
 - Prometheus: `https://prometheus.<ip-с-дефисами>.nip.io/`, basic auth.
 
 Логин `admin`, пароль генерируется при первом деплое и хранится только в кластере:
@@ -402,7 +413,10 @@ Gateway API:
 
 - несколько маршрутов и backend'ов: приложение, Grafana, Prometheus;
 - маршрутизация по path (`/v1`, `/v2`) и по hostname (`grafana.*`, `prometheus.*` через nip.io);
+- маршрутизация по заголовку: `X-Version: v2` → v2;
 - traffic splitting 80/20 между версиями приложения;
+- фильтр `ResponseHeaderModifier` (`X-Served-By`, `X-Request-ID`) и `timeouts` в HTTPRoute;
+- rate limit 10 запросов/с на `/v2` через `BackendTrafficPolicy` Envoy Gateway (429 сверх лимита);
 - TLS terminate на Gateway, HTTP → HTTPS redirect фильтром `RequestRedirect`;
 - basic auth на Prometheus через `SecurityPolicy` Envoy Gateway;
 - Gateway на портах 80/443 IP ноды через MetalLB, без NodePort.
@@ -414,8 +428,7 @@ Gateway API:
 - дашборд Grafana **Hello app** из ConfigMap: RPS, коды ответов, задержки, CPU/RAM, логи;
 - алерты `HelloDown` и `Hello5xx`;
 - централизованное хранение логов в Loki с поиском LogQL и просмотром в Grafana, срок хранения 72 часа;
-- сквозной `X-Request-ID`: Envoy возвращает его в ответе, nginx пишет в лог, запрос ищется в Loki по id;
-- метрики control-plane (etcd, scheduler, controller-manager, kube-proxy).
+- сквозной `X-Request-ID`: Envoy возвращает его в ответе, nginx пишет в лог, запрос ищется в Loki по id.
 
 Автоматизация и CI/CD:
 
@@ -425,7 +438,7 @@ Gateway API:
 - CD на VPS от непривилегированного пользователя с sudo.
 
 Надёжность: readiness/liveness-пробы, requests/limits, PodDisruptionBudget, две реплики v1,
-PVC для Prometheus и Loki, буфер Fluentd на диске.
+PVC для Prometheus и Loki, буфер Fluentd на диске, NetworkPolicy (см. «Безопасность»).
 
 ## Безопасность
 
