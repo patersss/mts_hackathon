@@ -12,4 +12,4 @@ lint:
 	ansible-lint ansible/site.yml ansible/vps-user.yml
 
 destroy:
-	ansible-playbook ansible/destroy.yml
+	.venv/bin/ansible-playbook ansible/destroy.yml
