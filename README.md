@@ -284,12 +284,13 @@ curl -sI http://$IP/v2 | grep -i x-app-version
 for i in $(seq 50); do curl -sI http://$IP/ | grep -i x-app-version; done | sort | uniq -c
 curl -sI -H 'X-Version: v2' http://$IP/ | grep -i x-app-version
 curl -sI http://$IP/ | grep -iE 'x-served-by|x-request-id'
-for i in $(seq 30); do curl -s -o /dev/null -w '%{http_code}\n' http://$IP/v2; done | sort | uniq -c
+seq 30 | xargs -P 30 -I{} curl -s -o /dev/null -w '%{http_code}\n' http://$IP/v2 | sort | uniq -c
 curl -sI http://grafana.${IP//./-}.nip.io/ | head -3
 ```
 
 Цикл по `/` показывает примерно 40 ответов v1 и 10 ответов v2. С заголовком `X-Version: v2` всегда
-отвечает v2. Цикл по `/v2` даёт часть ответов 429 (rate limit), на `/` и `/v1` лимита нет.
+отвечает v2. Параллельная пачка из 30 запросов на `/v2` даёт часть ответов 429 (лимит 10 запросов/с); последовательный
+цикл с удалённой машины в лимит не упирается, каждый запрос ждёт сетевую задержку. На `/` и `/v1` лимита нет.
 Последняя команда — 301 на HTTPS.
 
 ## Мониторинг
