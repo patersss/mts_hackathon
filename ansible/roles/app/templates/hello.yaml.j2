@@ -5,6 +5,48 @@ metadata:
   labels:
     pod-security.kubernetes.io/enforce: restricted
 {% for version in ['v1', 'v2'] %}
+{% set nginx_conf %}
+worker_processes 1;
+pid /tmp/nginx.pid;
+events { worker_connections 1024; }
+http {
+  client_body_temp_path /tmp/client_temp;
+  proxy_temp_path /tmp/proxy_temp;
+  fastcgi_temp_path /tmp/fastcgi_temp;
+  uwsgi_temp_path /tmp/uwsgi_temp;
+  scgi_temp_path /tmp/scgi_temp;
+  server_tokens off;
+
+  log_format json escape=json '{"time":"$time_iso8601","remote_addr":"$remote_addr",'
+    '"x_forwarded_for":"$http_x_forwarded_for","host":"$host","method":"$request_method",'
+    '"uri":"$request_uri","status":$status,"bytes":$body_bytes_sent,'
+    '"request_time":$request_time,"user_agent":"$http_user_agent","version":"{{ version }}",'
+    '"request_id":"$http_x_request_id"}';
+  access_log /dev/stdout json;
+  error_log /dev/stderr warn;
+
+  server {
+    listen 8080;
+    default_type text/plain;
+    add_header X-App-Version {{ version }} always;
+    location / {
+      return 200 "Hello World!\n";
+    }
+    location = /healthz {
+      access_log off;
+      return 200 "ok\n";
+    }
+  }
+
+  server {
+    listen 127.0.0.1:8081;
+    access_log off;
+    location = /stub_status {
+      stub_status;
+    }
+  }
+}
+{% endset %}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -13,45 +55,7 @@ metadata:
   namespace: {{ app_namespace }}
 data:
   nginx.conf: |
-    worker_processes 1;
-    pid /tmp/nginx.pid;
-    events { worker_connections 1024; }
-    http {
-      client_body_temp_path /tmp/client_temp;
-      proxy_temp_path /tmp/proxy_temp;
-      fastcgi_temp_path /tmp/fastcgi_temp;
-      uwsgi_temp_path /tmp/uwsgi_temp;
-      scgi_temp_path /tmp/scgi_temp;
-      server_tokens off;
-
-      log_format json escape=json '{"time":"$time_iso8601","remote_addr":"$remote_addr",'
-        '"x_forwarded_for":"$http_x_forwarded_for","host":"$host","method":"$request_method",'
-        '"uri":"$request_uri","status":$status,"bytes":$body_bytes_sent,'
-        '"request_time":$request_time,"user_agent":"$http_user_agent","version":"{{ version }}"}';
-      access_log /dev/stdout json;
-      error_log /dev/stderr warn;
-
-      server {
-        listen 8080;
-        default_type text/plain;
-        add_header X-App-Version {{ version }} always;
-        location / {
-          return 200 "Hello World!\n";
-        }
-        location = /healthz {
-          access_log off;
-          return 200 "ok\n";
-        }
-      }
-
-      server {
-        listen 127.0.0.1:8081;
-        access_log off;
-        location = /stub_status {
-          stub_status;
-        }
-      }
-    }
+{{ nginx_conf | indent(4, true) }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -71,6 +75,7 @@ spec:
         version: {{ version }}
       annotations:
         kubectl.kubernetes.io/default-container: nginx
+        checksum/config: "{{ nginx_conf | hash('sha1') }}"
     spec:
       automountServiceAccountToken: false
       securityContext:

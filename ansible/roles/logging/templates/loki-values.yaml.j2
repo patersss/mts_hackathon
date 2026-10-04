@@ -5,6 +5,12 @@ loki:
     replication_factor: 1
   storage:
     type: filesystem
+  # compactor удаляет данные старше retention_period, PVC не переполняется
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+  limits_config:
+    retention_period: 72h
   schemaConfig:
     configs:
       - from: "2024-01-01"
