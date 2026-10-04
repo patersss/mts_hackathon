@@ -122,6 +122,18 @@ make verify
 На минимальном образе Ubuntu может не быть `make`: `sudo apt-get install -y make` или
 напрямую `./deploy.sh` и `./scripts/verify.sh`.
 
+Доступ к Grafana и Prometheus после деплоя (логин `admin`, пароль случайный, создаётся при
+первом деплое и дальше не меняется):
+
+```bash
+IP=$(kubectl -n gateway get gateway public -o jsonpath='{.status.addresses[0].value}')
+echo "https://grafana.${IP//./-}.nip.io/  https://prometheus.${IP//./-}.nip.io/"
+kubectl -n monitoring get secret monitoring-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo
+```
+
+Команды выполняются от пользователя, запускавшего `make deploy`. Под root нужен
+`--kubeconfig /etc/kubernetes/admin.conf`.
+
 Что происходит при `make deploy`:
 
 1. `deploy.sh` проверяет, что это Ubuntu 24.04, ставит `python3-venv`, создаёт `.venv` с
